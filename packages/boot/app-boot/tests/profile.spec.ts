@@ -6,7 +6,7 @@
 
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   composeEntries,
@@ -237,6 +237,44 @@ describe('healProfilesModuleFallback', () => {
     healProfilesModuleFallback(anchor, home)
     const before = readlinkSync(join(fallback, 'dep-of-a'))
     expect(before).toContain('dep-of-a')
+  })
+
+  it('identifies a corrupt installation anchor manifest and preserves the parse failure', () => {
+    const anchor = stageInstallation({})
+    writeFileSync(anchor, '{')
+
+    let thrown: unknown
+    try {
+      healProfilesModuleFallback(anchor, tmp())
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeInstanceOf(Error)
+    if (!(thrown instanceof Error)) throw new TypeError('expected fallback healing to throw an Error')
+    expect(thrown.message).toContain(`dsh: failed to parse package manifest ${anchor}: SyntaxError`)
+    expect(thrown.cause).toBeInstanceOf(SyntaxError)
+  })
+
+  it('identifies a corrupt nested dependency manifest and preserves the parse failure', () => {
+    const anchor = stageInstallation({
+      'bundle-a': { deps: { 'dep-of-a': '0.0.0' } },
+    })
+    const manifestPath = join(dirname(anchor), 'node_modules', 'dep-of-a', 'package.json')
+    mkdirSync(dirname(manifestPath), { recursive: true })
+    writeFileSync(manifestPath, '{')
+
+    let thrown: unknown
+    try {
+      healProfilesModuleFallback(anchor, tmp())
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeInstanceOf(Error)
+    if (!(thrown instanceof Error)) throw new TypeError('expected fallback healing to throw an Error')
+    expect(thrown.message).toContain(`dsh: failed to parse package manifest ${manifestPath}: SyntaxError`)
+    expect(thrown.cause).toBeInstanceOf(SyntaxError)
   })
 
   it('throws when a fallback entry is a real directory', () => {

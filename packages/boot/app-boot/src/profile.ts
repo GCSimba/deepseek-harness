@@ -201,6 +201,16 @@ function ensureSymlink(link: string, target: string): void {
   }
 }
 
+/** Parse one package manifest from the installation dependency closure. */
+function readPackageManifest(path: string): ProfileManifest {
+  const raw = readFileSync(path, 'utf8')
+  try {
+    return JSON.parse(raw) as ProfileManifest
+  } catch (error) {
+    throw new Error(`dsh: failed to parse package manifest ${path}: ${String(error)}`, { cause: error })
+  }
+}
+
 /**
  * Maintain the flat module fallback `$DSH_HOME/profiles/node_modules`: one
  * symlink per package in the dsh app's resolvable dependency CLOSURE (BFS
@@ -224,7 +234,7 @@ export function healProfilesModuleFallback(installAnchor: string, home: string =
   const profilesDir = join(home, PROFILES_DIR)
   const modulesDir = join(profilesDir, 'node_modules')
   mkdirSync(modulesDir, { recursive: true })
-  const appManifest = JSON.parse(readFileSync(installAnchor, 'utf8')) as ProfileManifest
+  const appManifest = readPackageManifest(installAnchor)
   const links = new Map<string, string>()
   /* v8 ignore next -- a real app manifest always declares its name */
   if (appManifest.name !== undefined) links.set(appManifest.name, dirname(installAnchor))
@@ -244,7 +254,7 @@ export function healProfilesModuleFallback(installAnchor: string, home: string =
       if (dir === undefined) continue
       links.set(dep, dir)
       const manifestPath = join(dir, 'package.json')
-      queue.push({ anchor: manifestPath, manifest: JSON.parse(readFileSync(manifestPath, 'utf8')) as ProfileManifest })
+      queue.push({ anchor: manifestPath, manifest: readPackageManifest(manifestPath) })
     }
   }
   for (const [packageName, target] of links) {
