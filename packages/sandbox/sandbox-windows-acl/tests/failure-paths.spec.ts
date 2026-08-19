@@ -175,8 +175,27 @@ function pipeOkApi(overrides: Partial<Win32Bindings> = {}): {
 describe('spawn pipe failures close their handles', () => {
   const token = 1n as NativePtr
 
-  it('spawnSandboxed reports a CreatePipe failure', () => {
-    const api = { createPipe: vi.fn(() => 0), getLastError: vi.fn(() => 5), formatMessageW: vi.fn(() => 0) } as unknown as Win32Bindings
+  it('spawnSandboxed closes earlier pipes and preserves a later CreatePipe failure', () => {
+    const closed: bigint[] = []
+    let calls = 0
+    let next = 1n
+    let lastError = 5
+    const api = {
+      createPipe: vi.fn((readSlot: NativePtr, writeSlot: NativePtr) => {
+        calls++
+        if (calls === 2) return 0
+        koffi.encode(readSlot, PVOID, next++)
+        koffi.encode(writeSlot, PVOID, next++)
+        return 1
+      }),
+      getLastError: vi.fn(() => lastError),
+      closeHandle: vi.fn((handle: NativePtr) => {
+        closed.push(handle)
+        lastError = 6
+        return 1
+      }),
+      formatMessageW: vi.fn(() => 0),
+    } as unknown as Win32Bindings
     let caught: unknown
     try {
       spawnSandboxed(api, token, { command: 'probe.exe', args: [], cwd: 'C:\\' })
@@ -185,22 +204,49 @@ describe('spawn pipe failures close their handles', () => {
     }
     expect(caught).toBeInstanceOf(Win32Error)
     expect((caught as Win32Error).api).toBe('CreatePipe')
+    expect((caught as Win32Error).win32Code).toBe(5)
+    expect(closed).toEqual([1n, 2n])
   })
 
-  it('spawnSandboxed reports a NULL pipe handle after CreatePipe succeeds', () => {
-    const api = { createPipe: vi.fn(() => 1), getLastError: vi.fn(() => 5), formatMessageW: vi.fn(() => 0) } as unknown as Win32Bindings
+  it('spawnSandboxed closes a non-NULL pipe handle when its peer is NULL', () => {
+    const closeHandle = vi.fn(() => 1)
+    const api = {
+      createPipe: vi.fn((readSlot: NativePtr) => {
+        koffi.encode(readSlot, PVOID, 11n)
+        return 1
+      }),
+      getLastError: vi.fn(() => 0),
+      closeHandle,
+      formatMessageW: vi.fn(() => 0),
+    } as unknown as Win32Bindings
     let caught: unknown
     try {
       spawnSandboxed(api, token, { command: 'probe.exe', args: [], cwd: 'C:\\' })
     } catch (error) {
       caught = error
     }
-    expect(caught).toBeInstanceOf(Win32Error)
-    expect((caught as Win32Error).api).toBe('CreatePipe')
+    expect(caught).toEqual(new Error('CreatePipe succeeded but returned a null pipe handle'))
+    expect(closeHandle).toHaveBeenCalledExactlyOnceWith(11n)
   })
 
-  it('spawnSandboxed reports a SetHandleInformation failure', () => {
-    const { api } = pipeOkApi({ setHandleInformation: vi.fn(() => 0) })
+  it('spawnSandboxed closes a non-NULL write handle when the read peer is NULL', () => {
+    const closeHandle = vi.fn(() => 1)
+    const api = {
+      createPipe: vi.fn((_readSlot: NativePtr, writeSlot: NativePtr) => {
+        koffi.encode(writeSlot, PVOID, 12n)
+        return 1
+      }),
+      getLastError: vi.fn(() => 0),
+      closeHandle,
+      formatMessageW: vi.fn(() => 0),
+    } as unknown as Win32Bindings
+    expect(() => spawnSandboxed(api, token, { command: 'probe.exe', args: [], cwd: 'C:\\' }))
+      .toThrow('CreatePipe succeeded but returned a null pipe handle')
+    expect(closeHandle).toHaveBeenCalledExactlyOnceWith(12n)
+  })
+
+  it('spawnSandboxed closes all pipes after a SetHandleInformation failure', () => {
+    const { api, closed } = pipeOkApi({ setHandleInformation: vi.fn(() => 0) })
     let caught: unknown
     try {
       spawnSandboxed(api, token, { command: 'probe.exe', args: [], cwd: 'C:\\' })
@@ -209,20 +255,45 @@ describe('spawn pipe failures close their handles', () => {
     }
     expect(caught).toBeInstanceOf(Win32Error)
     expect((caught as Win32Error).api).toBe('SetHandleInformation')
+    expect(closed).toEqual([1n, 2n, 3n, 4n, 5n, 6n])
   })
 
-  it('spawnSandboxed rejects NULL process/thread handles after a successful spawn', () => {
-    const { api } = pipeOkApi({
+  it('spawnSandboxed terminates and closes a partial process result plus every pipe', () => {
+    const terminateProcess = vi.fn(() => 1)
+    const { api, closeHandle } = pipeOkApi({
       createProcessAsUserW: vi.fn((
         _token: unknown, _app: unknown, _cmd: unknown, _pa: unknown, _ta: unknown,
         _inherit: unknown, _flags: unknown, _env: unknown, _cwd: unknown, _si: unknown, processInfo: NativePtr,
       ) => {
-        koffi.encode(processInfo, PROCESS_INFORMATION, { hProcess: null, hThread: null, dwProcessId: 1234, dwThreadId: 5678 })
+        koffi.encode(processInfo, PROCESS_INFORMATION, { hProcess: 200n, hThread: null, dwProcessId: 1234, dwThreadId: 5678 })
         return 1
       }),
+      terminateProcess,
     })
     expect(() => spawnSandboxed(api, token, { command: 'probe.exe', args: [], cwd: 'C:\\' }))
       .toThrow(/null process\/thread handles/u)
+    expect(terminateProcess).toHaveBeenCalledExactlyOnceWith(200n, 1)
+    for (const handle of [1n, 2n, 3n, 4n, 5n, 6n, 200n]) {
+      expect(closeHandle).toHaveBeenCalledWith(handle)
+    }
+  })
+
+  it('spawnSandboxed closes a returned thread when the process handle is NULL', () => {
+    const terminateProcess = vi.fn(() => 1)
+    const { api, closeHandle } = pipeOkApi({
+      createProcessAsUserW: vi.fn((
+        _token: unknown, _app: unknown, _cmd: unknown, _pa: unknown, _ta: unknown,
+        _inherit: unknown, _flags: unknown, _env: unknown, _cwd: unknown, _si: unknown, processInfo: NativePtr,
+      ) => {
+        koffi.encode(processInfo, PROCESS_INFORMATION, { hProcess: null, hThread: 201n, dwProcessId: 1234, dwThreadId: 5678 })
+        return 1
+      }),
+      terminateProcess,
+    })
+    expect(() => spawnSandboxed(api, token, { command: 'probe.exe', args: [], cwd: 'C:\\' }))
+      .toThrow(/null process\/thread handles/u)
+    expect(terminateProcess).not.toHaveBeenCalled()
+    expect(closeHandle).toHaveBeenCalledWith(201n)
   })
 })
 
@@ -264,7 +335,14 @@ describe('spawnSandboxedInherited failure paths', () => {
   }
 
   it('closes the job and reports when GetStdHandle yields a NULL handle', () => {
-    const { api, closeHandle } = inheritedApi({ getStdHandle: vi.fn(() => 0n as NativePtr) })
+    let lastError = 5
+    const { api } = inheritedApi({ getStdHandle: vi.fn(() => 0n as NativePtr) })
+    const closeHandle = vi.fn(() => {
+      lastError = 6
+      return 1
+    })
+    api.closeHandle = closeHandle
+    api.getLastError = vi.fn(() => lastError)
     let caught: unknown
     try {
       spawnSandboxedInherited(api, token, { command: 'probe.exe', args: [], cwd: 'C:\\' })
@@ -273,11 +351,33 @@ describe('spawnSandboxedInherited failure paths', () => {
     }
     expect(caught).toBeInstanceOf(Win32Error)
     expect((caught as Win32Error).api).toBe('GetStdHandle')
+    expect((caught as Win32Error).win32Code).toBe(5)
     expect(closeHandle).toHaveBeenCalledWith(100n)
   })
 
-  it('reports a SetHandleInformation failure while enabling stdio inheritance', () => {
-    const { api } = inheritedApi({ setHandleInformation: vi.fn(() => 0) })
+  it('closes the job and reports INVALID_HANDLE_VALUE from GetStdHandle', () => {
+    const { api, closeHandle } = inheritedApi({
+      getStdHandle: vi.fn(() => 0xFFFFFFFFFFFFFFFFn as NativePtr),
+      getLastError: vi.fn(() => 6),
+    })
+    let caught: unknown
+    try {
+      spawnSandboxedInherited(api, token, { command: 'probe.exe', args: [], cwd: 'C:\\' })
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toMatchObject({ api: 'GetStdHandle', win32Code: 6 })
+    expect(closeHandle).toHaveBeenCalledExactlyOnceWith(100n)
+  })
+
+  it('restores earlier stdio inherit bits and closes the job when enabling the next handle fails', () => {
+    let enables = 0
+    const setHandleInformation = vi.fn((_handle: NativePtr, _mask: number, flags: number) => {
+      if (flags === 0) return 1
+      enables++
+      return enables === 2 ? 0 : 1
+    })
+    const { api, closeHandle } = inheritedApi({ setHandleInformation })
     let caught: unknown
     try {
       spawnSandboxedInherited(api, token, { command: 'probe.exe', args: [], cwd: 'C:\\' })
@@ -286,10 +386,25 @@ describe('spawnSandboxedInherited failure paths', () => {
     }
     expect(caught).toBeInstanceOf(Win32Error)
     expect((caught as Win32Error).api).toBe('SetHandleInformation')
+    expect(setHandleInformation).toHaveBeenCalledWith(50n, abi.HANDLE_FLAG_INHERIT, 0)
+    expect(closeHandle).toHaveBeenCalledWith(100n)
   })
 
-  it('closes the job and reports when CreateProcessAsUserW fails', () => {
-    const { api, closeHandle } = inheritedApi({ createProcessAsUserW: vi.fn(() => 0) })
+  it('preserves CreateProcessAsUserW failure across stdio restoration and job cleanup', () => {
+    let lastError = 0
+    const setHandleInformation = vi.fn((_handle: NativePtr, _mask: number, flags: number) => {
+      if (flags === 0) lastError = 6
+      return 1
+    })
+    const createProcessAsUserW = vi.fn(() => {
+      lastError = 1314
+      return 0
+    })
+    const { api, closeHandle } = inheritedApi({
+      createProcessAsUserW,
+      getLastError: vi.fn(() => lastError),
+      setHandleInformation,
+    })
     let caught: unknown
     try {
       spawnSandboxedInherited(api, token, { command: 'probe.exe', args: [], cwd: 'C:\\' })
@@ -298,21 +413,45 @@ describe('spawnSandboxedInherited failure paths', () => {
     }
     expect(caught).toBeInstanceOf(Win32Error)
     expect((caught as Win32Error).api).toBe('CreateProcessAsUserW')
+    expect((caught as Win32Error).win32Code).toBe(1314)
     expect(closeHandle).toHaveBeenCalledWith(100n)
   })
 
-  it('closes the job and rejects NULL process/thread handles after a successful spawn', () => {
+  it('terminates and closes a partial process result plus the job', () => {
+    const terminateProcess = vi.fn(() => 1)
     const { api, closeHandle } = inheritedApi({
       createProcessAsUserW: vi.fn((
         _token: unknown, _app: unknown, _cmd: unknown, _pa: unknown, _ta: unknown,
         _inherit: unknown, _flags: unknown, _env: unknown, _cwd: unknown, _si: unknown, processInfo: NativePtr,
       ) => {
-        koffi.encode(processInfo, PROCESS_INFORMATION, { hProcess: null, hThread: null, dwProcessId: 1234, dwThreadId: 5678 })
+        koffi.encode(processInfo, PROCESS_INFORMATION, { hProcess: 200n, hThread: null, dwProcessId: 1234, dwThreadId: 5678 })
         return 1
       }),
+      terminateProcess,
     })
     expect(() => spawnSandboxedInherited(api, token, { command: 'probe.exe', args: [], cwd: 'C:\\' }))
       .toThrow(/null process\/thread handles/u)
+    expect(terminateProcess).toHaveBeenCalledExactlyOnceWith(200n, 1)
+    expect(closeHandle).toHaveBeenCalledWith(200n)
+    expect(closeHandle).toHaveBeenCalledWith(100n)
+  })
+
+  it('closes a returned thread and the job when the inherited process handle is NULL', () => {
+    const terminateProcess = vi.fn(() => 1)
+    const { api, closeHandle } = inheritedApi({
+      createProcessAsUserW: vi.fn((
+        _token: unknown, _app: unknown, _cmd: unknown, _pa: unknown, _ta: unknown,
+        _inherit: unknown, _flags: unknown, _env: unknown, _cwd: unknown, _si: unknown, processInfo: NativePtr,
+      ) => {
+        koffi.encode(processInfo, PROCESS_INFORMATION, { hProcess: null, hThread: 201n, dwProcessId: 1234, dwThreadId: 5678 })
+        return 1
+      }),
+      terminateProcess,
+    })
+    expect(() => spawnSandboxedInherited(api, token, { command: 'probe.exe', args: [], cwd: 'C:\\' }))
+      .toThrow(/null process\/thread handles/u)
+    expect(terminateProcess).not.toHaveBeenCalled()
+    expect(closeHandle).toHaveBeenCalledWith(201n)
     expect(closeHandle).toHaveBeenCalledWith(100n)
   })
 
@@ -369,17 +508,41 @@ describe('drainPipe', () => {
     })
   })
 
-  it('reports a PeekNamedPipe failure that is not a clean EOF', () => {
+  it('waits when the pipe is empty, then closes it at EOF without reading', async () => {
+    let peeks = 0
+    const readFile = vi.fn(() => 1)
+    const closeHandle = vi.fn(() => 1)
+    const api = {
+      peekNamedPipe: vi.fn((_pipe: unknown, _buffer: unknown, _size: unknown, _read: unknown, totalAvail: NativePtr) => {
+        peeks++
+        if (peeks > 1) return 0
+        koffi.encode(totalAvail, 'uint32', 0)
+        return 1
+      }),
+      readFile,
+      getLastError: vi.fn(() => abi.ERROR_BROKEN_PIPE),
+      closeHandle,
+      formatMessageW: vi.fn(() => 0),
+    } as unknown as Win32Bindings
+    await expect(drainPipe(api, 30n as NativePtr)).resolves.toHaveLength(0)
+    expect(readFile).not.toHaveBeenCalled()
+    expect(closeHandle).toHaveBeenCalledExactlyOnceWith(30n)
+  })
+
+  it('reports a PeekNamedPipe failure that is not a clean EOF and closes the read end', async () => {
+    const closeHandle = vi.fn(() => 1)
     const api = {
       peekNamedPipe: vi.fn(() => 0),
       getLastError: vi.fn(() => 5),
-      closeHandle: vi.fn(() => 1),
+      closeHandle,
       formatMessageW: vi.fn(() => 0),
     } as unknown as Win32Bindings
-    return expect(drainPipe(api, 30n as NativePtr)).rejects.toMatchObject({ api: 'PeekNamedPipe' })
+    await expect(drainPipe(api, 30n as NativePtr)).rejects.toMatchObject({ api: 'PeekNamedPipe' })
+    expect(closeHandle).toHaveBeenCalledExactlyOnceWith(30n)
   })
 
-  it('reports a ReadFile failure after data was reported available', () => {
+  it('reports a ReadFile failure after data was reported available and closes the read end', async () => {
+    const closeHandle = vi.fn(() => 1)
     const api = {
       peekNamedPipe: vi.fn((_pipe: unknown, _buffer: unknown, _size: unknown, _read: unknown, totalAvail: NativePtr) => {
         koffi.encode(totalAvail, 'uint32', 4)
@@ -387,10 +550,11 @@ describe('drainPipe', () => {
       }),
       readFile: vi.fn(() => 0),
       getLastError: vi.fn(() => 5),
-      closeHandle: vi.fn(() => 1),
+      closeHandle,
       formatMessageW: vi.fn(() => 0),
     } as unknown as Win32Bindings
-    return expect(drainPipe(api, 30n as NativePtr)).rejects.toMatchObject({ api: 'ReadFile' })
+    await expect(drainPipe(api, 30n as NativePtr)).rejects.toMatchObject({ api: 'ReadFile' })
+    expect(closeHandle).toHaveBeenCalledExactlyOnceWith(30n)
   })
 
   it('drains one chunk and stops at ERROR_BROKEN_PIPE', () => {
@@ -418,23 +582,49 @@ describe('drainPipe', () => {
 })
 
 describe('waitForExit', () => {
-  it('reports a WaitForSingleObject failure', () => {
+  it('reports a WaitForSingleObject failure, preserves its code, and closes the process', () => {
+    let lastError = 5
+    const closeHandle = vi.fn(() => {
+      lastError = 6
+      return 1
+    })
     const api = {
       waitForSingleObject: vi.fn(() => 0xFFFFFFFF),
-      getLastError: vi.fn(() => 5),
+      getLastError: vi.fn(() => lastError),
+      closeHandle,
       formatMessageW: vi.fn(() => 0),
     } as unknown as Win32Bindings
-    expect(() => waitForExit(api, 200n as NativePtr)).toThrow(Win32Error)
+    let caught: unknown
+    try {
+      waitForExit(api, 200n as NativePtr)
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toMatchObject({ api: 'WaitForSingleObject', win32Code: 5 })
+    expect(closeHandle).toHaveBeenCalledExactlyOnceWith(200n)
   })
 
-  it('reports a GetExitCodeProcess failure', () => {
+  it('reports a GetExitCodeProcess failure, preserves its code, and closes the process', () => {
+    let lastError = 5
+    const closeHandle = vi.fn(() => {
+      lastError = 6
+      return 1
+    })
     const api = {
       waitForSingleObject: vi.fn(() => 0),
       getExitCodeProcess: vi.fn(() => 0),
-      getLastError: vi.fn(() => 5),
+      getLastError: vi.fn(() => lastError),
+      closeHandle,
       formatMessageW: vi.fn(() => 0),
     } as unknown as Win32Bindings
-    expect(() => waitForExit(api, 200n as NativePtr)).toThrow(Win32Error)
+    let caught: unknown
+    try {
+      waitForExit(api, 200n as NativePtr)
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toMatchObject({ api: 'GetExitCodeProcess', win32Code: 5 })
+    expect(closeHandle).toHaveBeenCalledExactlyOnceWith(200n)
   })
 
   it('returns the exit code and closes the process handle', () => {

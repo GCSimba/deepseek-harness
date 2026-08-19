@@ -27,9 +27,9 @@ export function isNullPtr(value: NativePtr | null | undefined): value is null | 
 }
 
 /**
- * True for CreateFileW's INVALID_HANDLE_VALUE failure marker (-1, which
- * koffi hands back as the unsigned 64-bit all-ones pointer).
- * @param handle - the handle CreateFileW returned.
+ * True for Win32's INVALID_HANDLE_VALUE failure marker (-1, which koffi hands
+ * back as the unsigned 64-bit all-ones pointer), as well as NULL.
+ * @param handle - the handle a Win32 API returned.
  * @returns whether the handle signals failure.
  */
 export function isInvalidHandle(handle: NativePtr | null | undefined): boolean {
