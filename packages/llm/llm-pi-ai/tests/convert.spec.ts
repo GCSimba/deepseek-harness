@@ -791,6 +791,21 @@ describe('mapStopReason / mapUsage', () => {
     }))).toMatchObject({ kind: 'error', failure: { code: 'PI_AI_ERROR' } })
   })
 
+  it('classifies the explicit server_error marker without matching generic server text', () => {
+    expect(mapStopReason(assistant({
+      stopReason: 'error',
+      errorMessage: 'Error Code server_error: Our servers are currently overloaded. Please try again later.',
+    }))).toMatchObject({ kind: 'error', failure: { code: 'SERVER' } })
+
+    for (const errorMessage of [
+      'Error Code client_error: The server rejected the request.',
+      'The provider server is busy.',
+    ]) {
+      expect(mapStopReason(assistant({ stopReason: 'error', errorMessage })))
+        .toMatchObject({ kind: 'error', failure: { code: 'PI_AI_ERROR' } })
+    }
+  })
+
   it.each([
     'other side closed',
     'HTTP2 request did not get a response',
