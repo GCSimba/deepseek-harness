@@ -180,6 +180,18 @@ describe('loadWin32DialogBindings over the fake COM world', () => {
     expect(world.uninitialized).toBe(1)
   })
 
+  it('preserves a folder path containing a UTF-16 code unit with a zero low byte', async () => {
+    const path = 'C:\\疏水阀数据\\2025年\\子目录'
+    const world = comWorld({ path })
+    installFakeKoffi(world)
+    const bindings = await (await loadBindingsModule()).loadWin32DialogBindings()
+
+    expect(runFolderDialog(bindings, 'Pick', vi.fn())).toBe(path)
+    expect(world.freed).toHaveLength(1)
+    expect(world.released).toEqual(['item', 'dialog'])
+    expect(world.uninitialized).toBe(1)
+  })
+
   it('maps dismissal and the S_FALSE CoInitializeEx', async () => {
     const world = comWorld({ showHr: HRESULT_CANCELLED, coInitHr: 1 })
     installFakeKoffi(world)

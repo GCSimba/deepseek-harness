@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-21-win32-folder-path-utf16-termination.md
+2026-08-21-win32-folder-path-utf16-termination.md: bbac348f785d9b1b0dfa4c2abbb7739aa4eb9a8f
+2026-08-21-win32-folder-path-utf16-termination.zh.md: c240f765d6c2bc384443a3678259471d9e95ad20
