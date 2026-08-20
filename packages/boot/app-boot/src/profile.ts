@@ -201,7 +201,7 @@ function ensureSymlink(link: string, target: string): void {
   }
 }
 
-/** Parse one package manifest from the installation dependency closure. */
+/** Read one package manifest while preserving file errors and identifying parse failures by path. */
 function readPackageManifest(path: string): ProfileManifest {
   const raw = readFileSync(path, 'utf8')
   try {
@@ -397,7 +397,7 @@ export function loadProfile(
   const bundles = manifest.dsh?.profile?.bundles ?? []
   const layers = bundles.map((packageName): ProfileLayer => {
     const packageDir = resolveBundleDir(binName, packageName, installAnchor, dir)
-    const bundleManifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as ProfileManifest
+    const bundleManifest = readPackageManifest(join(packageDir, 'package.json'))
     const declared = bundleManifest.dsh?.bundle?.patch
     if (declared === undefined) {
       throw new Error(`${binName}: profile bundle ${JSON.stringify(packageName)} declares no dsh.bundle in its package.json`)

@@ -195,6 +195,27 @@ describe('loadProfile', () => {
     initProfile(dir, ['not-a-bundle'])
     expect(() => loadProfile('t', 'demo', anchor, home)).toThrow('declares no dsh.bundle')
   })
+
+  it('identifies a corrupt bundle manifest and preserves the parse failure', () => {
+    const anchor = stageInstallation({ 'bundle-a': { patch: '[]\n' } })
+    const home = tmp()
+    const dir = resolveProfileDir('demo', home)
+    initProfile(dir, ['bundle-a'])
+    const manifestPath = join(dirname(anchor), 'node_modules', 'bundle-a', 'package.json')
+    writeFileSync(manifestPath, '{')
+
+    let thrown: unknown
+    try {
+      loadProfile('t', 'demo', anchor, home)
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeInstanceOf(Error)
+    if (!(thrown instanceof Error)) throw new TypeError('expected profile loading to throw an Error')
+    expect(thrown.message).toContain(`dsh: failed to parse package manifest ${manifestPath}: SyntaxError`)
+    expect(thrown.cause).toBeInstanceOf(SyntaxError)
+  })
 })
 
 describe('composeEntries', () => {
