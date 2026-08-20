@@ -89,13 +89,18 @@ interface Domain<S extends DomainSpec> {
    * the domain name for a later open. Idempotent — repeated calls share one
    * teardown. The consumer owns this call (typically as its own `ctx.effect`
    * disposer); the facility closes any domain left open when it unmounts.
+   * A `KvUnit` `closed` rejection during a backend write performs the same
+   * terminal transition automatically, so cached reads also reject and a
+   * fresh open can reconstruct state from the medium.
    * @returns resolution after the unit is released.
    */
   close(): Promise<void>
 }
 ```
 
-Reads are synchronous from authoritative in-memory state: `KvTable` exposes `get`/`entries`/`keys`/`size` (snapshot iterators that stay stable while queued writes land), and the global handle's `get()` serves the spec's `initial` until the first `set` materializes the slot on the medium. Every write — `put`, `delete`, `update`, `global.set` — queues on one per-domain chain and reaches backend durability first, then mutates memory, then emits `domain/changed`; a rejected backend write leaves memory untouched, so reads never diverge from the medium. `update(key, fn)` is an atomic read-modify-write at its chain slot (a missing key rejects `missing-key`); `delete` of an absent key resolves `false` with no write and no event. Returned records are the stored objects themselves, not copies — replace via `put`/`update`, never mutate in place.
+A non-terminal rejected backend write leaves domain memory unchanged and its write chain usable. A `KvUnit` method that rejects with `StorageError('closed')` instead makes cached reads and new writes reject, drains the chain without running queued transforms, closes the unit, and then frees the name for a fresh open from the medium.
+
+Reads are synchronous from authoritative in-memory state: `KvTable` exposes `get`/`entries`/`keys`/`size` (snapshot iterators that stay stable while queued writes land), and the global handle's `get()` serves the spec's `initial` until the first `set` materializes the slot on the medium. Every write — `put`, `delete`, `update`, `global.set` — queues on one per-domain chain and reaches backend durability first, then mutates memory, then emits `domain/changed`; a non-terminal rejected backend write leaves memory untouched, so a live domain's reads do not diverge from the medium. `update(key, fn)` is an atomic read-modify-write at its chain slot (a missing key rejects `missing-key`); `delete` of an absent key resolves `false` with no write and no event. Returned records are the stored objects themselves, not copies — replace via `put`/`update`, never mutate in place.
 
 ## The domain facility: `ctx.storageDomain`
 

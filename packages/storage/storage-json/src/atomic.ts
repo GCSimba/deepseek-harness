@@ -15,6 +15,19 @@ import { open, rename, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
+/** A replacement is visible, but syncing its parent directory failed. */
+export class PublishedWriteDurabilityError extends Error {
+  override readonly name = 'PublishedWriteDurabilityError'
+
+  /**
+   * @param path - Target whose replacement is already visible.
+   * @param cause - Parent-directory synchronization failure.
+   */
+  constructor(path: string, cause: unknown) {
+    super(`replacement for '${path}' is visible, but parent-directory durability could not be proven`, { cause })
+  }
+}
+
 /**
  * Durably replace `path` with `data`.
  * @param path - Absolute target file path.
@@ -23,6 +36,7 @@ import { randomUUID } from 'node:crypto'
  */
 export async function writeAtomic(path: string, data: string): Promise<void> {
   const tmp = join(dirname(path), `.${randomUUID()}.tmp`)
+  let published = false
   try {
     const handle = await open(tmp, 'wx', 0o600)
     try {
@@ -32,9 +46,15 @@ export async function writeAtomic(path: string, data: string): Promise<void> {
       await handle.close()
     }
     await rename(tmp, path)
+    published = true
     await fsyncDirectory(dirname(path))
   } catch (error) {
-    await rm(tmp, { force: true })
+    if (published) throw new PublishedWriteDurabilityError(path, error)
+    try {
+      await rm(tmp, { force: true })
+    } catch (_stagingCleanupFailure) {
+      // The publication failed; cleanup of its private sibling must not replace the primary error.
+    }
     throw error
   }
 }
@@ -46,8 +66,15 @@ async function fsyncDirectory(path: string): Promise<void> {
   const handle = await open(path, 'r')
   try {
     await handle.sync()
-  } finally {
-    await handle.close()
+  } catch (error) {
+    try {
+      await handle.close()
+    } catch (_directoryCloseFailure) {
+      // The synchronization failure is the durability result; a failure from
+      // the attempted handle cleanup must not replace its diagnostic cause.
+    }
+    throw error
   }
+  await handle.close()
 }
 /* v8 ignore stop */

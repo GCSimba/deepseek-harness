@@ -10,7 +10,7 @@
 import { readFile } from 'node:fs/promises'
 import { StorageError } from '@deepseek-ai/dsh-storage'
 import type { KvUnit, KvUnitDescriptor } from '@deepseek-ai/dsh-storage'
-import { writeAtomic } from './atomic.ts'
+import { PublishedWriteDurabilityError, writeAtomic } from './atomic.ts'
 import { parse, serialize } from './format.ts'
 import type { UnitState } from './format.ts'
 
@@ -46,6 +46,7 @@ export async function openJsonUnit(
 
 class JsonKvUnit implements KvUnit {
   private closed = false
+  private disposal?: Promise<void>
   /** In-flight publishes; close() drains them before releasing the unit. */
   private readonly inFlight = new Set<Promise<void>>()
 
@@ -72,12 +73,12 @@ class JsonKvUnit implements KvUnit {
     const hadKey = records.has(key)
     const previous = records.get(key)
     records.set(key, value)
-    // Roll back on a failed publish: memory is authoritative, so a rejected
-    // write must not survive in memory (or ride along with the next publish).
-    await this.publish().catch((error: unknown) => {
+    // Roll back a pre-publication failure: memory is authoritative until a
+    // replacement becomes visible, so an uncommitted mutation must not ride
+    // along with the next publication.
+    await this.commitMutation(() => {
       if (hadKey) records.set(key, previous)
       else records.delete(key)
-      throw error
     })
   }
 
@@ -87,9 +88,8 @@ class JsonKvUnit implements KvUnit {
     if (!records.has(key)) return
     const previous = records.get(key)
     records.delete(key)
-    await this.publish().catch((error: unknown) => {
+    await this.commitMutation(() => {
       records.set(key, previous)
-      throw error
     })
   }
 
@@ -100,18 +100,22 @@ class JsonKvUnit implements KvUnit {
     }
     const previous = this.state.global
     this.state.global = value
-    await this.publish().catch((error: unknown) => {
+    await this.commitMutation(() => {
       this.state.global = previous
-      throw error
     })
   }
 
   async close(): Promise<void> {
-    if (this.closed) {
-      await Promise.allSettled(this.inFlight)
-      return
-    }
+    await this.retire()
+  }
+
+  private retire(): Promise<void> {
     this.closed = true
+    this.disposal ??= this.runClose()
+    return this.disposal
+  }
+
+  private async runClose(): Promise<void> {
     await Promise.allSettled(this.inFlight)
     this.onClose()
   }
@@ -128,6 +132,23 @@ class JsonKvUnit implements KvUnit {
       throw new Error(`unit '${this.descriptor.name}' does not declare table '${table}'`)
     }
     return records
+  }
+
+  private async commitMutation(rollBack: () => void): Promise<void> {
+    try {
+      await this.publish()
+    } catch (error) {
+      if (error instanceof PublishedWriteDurabilityError) {
+        await this.retire()
+        throw new StorageError(
+          'closed',
+          `unit '${this.descriptor.name}' cannot continue after a published replacement failed directory synchronization`,
+          { cause: error },
+        )
+      }
+      rollBack()
+      throw error
+    }
   }
 
   private publish(): Promise<void> {

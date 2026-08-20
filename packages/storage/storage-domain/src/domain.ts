@@ -3,13 +3,15 @@
  * per-domain write chain, and change-event emission. Reads are synchronous
  * from memory; every write queues on the chain, awaits backend durability
  * FIRST, then mutates memory, then emits `domain/changed` — a rejected
- * backend write leaves memory untouched (no divergence between reads and the
- * medium), and events carry values that equal the in-memory state at
- * emission, in write order.
+ * backend write leaves memory untouched and emits no event. A `KvUnit`
+ * `closed` rejection retires the domain because its cached state can no
+ * longer be reconciled with that unit; events carry values that equal the
+ * in-memory state at emission, in write order.
  * @module @deepseek-ai/dsh-storage-domain/src/domain
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { StorageError } from '@deepseek-ai/dsh-storage'
 import type { KvUnit } from '@deepseek-ai/dsh-storage'
 import { DomainError } from './error.ts'
 import type { DomainSpec, DomainGlobalSpec, TableKeyOf, TableValueOf } from './spec.ts'
@@ -113,6 +115,9 @@ export interface Domain<S extends DomainSpec> {
    * the domain name for a later open. Idempotent — repeated calls share one
    * teardown. The consumer owns this call (typically as its own `ctx.effect`
    * disposer); the facility closes any domain left open when it unmounts.
+   * A `KvUnit` `closed` rejection during a backend write performs the same
+   * terminal transition automatically, so cached reads also reject and a
+   * fresh open can reconstruct state from the medium.
    * @returns resolution after the unit is released.
    */
   close(): Promise<void>
@@ -121,10 +126,11 @@ export interface Domain<S extends DomainSpec> {
 /** Internal boundary handing table handles their domain-owned write machinery. */
 interface TableHost {
   readonly domainName: string
-  readonly unit: KvUnit
   /** Queue one job on the domain's single write chain. */
   enqueue<T>(job: () => Promise<T>): Promise<T>
-  /** Throw `closed` once the domain has fully closed (reads stay valid while draining). */
+  /** Run one unit write, retiring the domain only for a backend `closed` rejection. */
+  writeUnit(write: (unit: KvUnit) => Promise<void>): Promise<void>
+  /** Throw `closed` after terminal unit failure or completed ordinary teardown. */
   assertReadable(): void
   /** Emit `domain/changed` for one durably landed write. */
   emitChanged(change: DomainChanged): void
@@ -149,6 +155,8 @@ export class DomainImpl {
   private chain: Promise<void> = Promise.resolve()
   /** Set when close begins: new writes reject while already-queued writes drain. */
   private disposing = false
+  /** Set when a unit write proves cached reads can no longer be served safely. */
+  private terminal = false
   /** Set when close finishes (chain drained, unit closed): reads reject from here on. */
   private closed = false
   private disposal?: Promise<void>
@@ -176,8 +184,8 @@ export class DomainImpl {
     this.name = spec.name
     const host: TableHost = {
       domainName: spec.name,
-      unit,
       enqueue: job => this.enqueue(job),
+      writeUnit: write => this.writeUnit(write),
       assertReadable: () => { this.assertReadable() },
       emitChanged: (change) => { this.emitChanged(change) },
     }
@@ -192,7 +200,7 @@ export class DomainImpl {
           return this.globalValue
         },
         set: value => this.enqueue(async () => {
-          await this.unit.setGlobal(value)
+          await this.writeUnit(unit => unit.setGlobal(value))
           this.globalValue = value
           this.emitChanged({ domain: this.name, table: '', key: '', operation: 'put', value })
         }),
@@ -239,8 +247,7 @@ export class DomainImpl {
     // this await is a pure drain barrier.
     await this.chain
     await this.unit.close()
-    this.closed = true
-    this.onClosed()
+    this.finishClosed()
   }
 
   /**
@@ -264,13 +271,47 @@ export class DomainImpl {
     if (this.disposing) {
       return Promise.reject(new DomainError('closed', `domain '${this.name}' is closed`))
     }
-    const result = this.chain.then(job)
-    this.chain = result.then(noop, noop)
-    return result
+    const execution = this.chain.then(async () => {
+      if (this.terminal) throw new DomainError('closed', `domain '${this.name}' is closed`)
+      return job()
+    })
+    this.chain = execution.then(noop, noop)
+    return execution.catch(async (error: unknown) => {
+      if (this.terminal && this.disposal !== undefined) {
+        try {
+          await this.disposal
+        } catch (_teardownFailure) {
+          // The queued operation owns this rejection; close() exposes any
+          // independent teardown failure through the shared disposal.
+        }
+      }
+      throw error
+    })
+  }
+
+  private async writeUnit(write: (unit: KvUnit) => Promise<void>): Promise<void> {
+    try {
+      await write(this.unit)
+    } catch (error) {
+      if (error instanceof StorageError && error.code === 'closed') this.beginTerminalClose()
+      throw error
+    }
+  }
+
+  private beginTerminalClose(): void {
+    this.terminal = true
+    this.disposing = true
+    this.disposal ??= this.runClose()
+  }
+
+  private finishClosed(): void {
+    this.disposing = true
+    this.closed = true
+    this.onClosed()
   }
 
   private assertReadable(): void {
-    if (this.closed) {
+    if (this.terminal || this.closed) {
       throw new DomainError('closed', `domain '${this.name}' is closed`)
     }
   }
@@ -306,7 +347,7 @@ class KvTableImpl<K extends string, V> implements KvTable<K, V> {
 
   put(key: K, value: V): Promise<void> {
     return this.host.enqueue(async () => {
-      await this.host.unit.putRecord(this.tableName, key, value)
+      await this.host.writeUnit(unit => unit.putRecord(this.tableName, key, value))
       this.records.set(key, value)
       this.emitPut(key, value)
     })
@@ -317,7 +358,7 @@ class KvTableImpl<K extends string, V> implements KvTable<K, V> {
       // Existence is decided at this job's chain slot, not at call time: an
       // earlier queued put of the same key makes this delete observe it.
       if (!this.records.has(key)) return false
-      await this.host.unit.deleteRecord(this.tableName, key)
+      await this.host.writeUnit(unit => unit.deleteRecord(this.tableName, key))
       this.records.delete(key)
       this.host.emitChanged({
         domain: this.host.domainName,
@@ -338,7 +379,7 @@ class KvTableImpl<K extends string, V> implements KvTable<K, V> {
         )
       }
       const next = fn(this.records.get(key) as V)
-      await this.host.unit.putRecord(this.tableName, key, next)
+      await this.host.writeUnit(unit => unit.putRecord(this.tableName, key, next))
       this.records.set(key, next)
       this.emitPut(key, next)
       return next

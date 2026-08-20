@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
-import Storage, { storageBackendServiceKey } from '@deepseek-ai/dsh-storage'
+import Storage, { StorageError, storageBackendServiceKey } from '@deepseek-ai/dsh-storage'
 import { apply, DomainFacility, defineDomain, domainTable } from '../src/index.ts'
 import type { Config } from '../src/index.ts'
 import type { DomainChanged } from '../src/events.ts'
@@ -276,6 +276,131 @@ describe('durability failure', () => {
     await expect(domain.global.set({ theme: 'dark' })).rejects.toThrow(/injected/)
     expect(domain.global.get()).toEqual({ theme: 'plain' })
     expect(pool.media.get('demo')!.global).toBeNull()
+  })
+
+  it('keeps the domain live when an update callback throws a closed storage error', async () => {
+    const { facility, changes } = await harness()
+    const domain = await facility.open(spec)
+    const table = domain.table('items')
+    await table.put('a', { label: 'original', count: 1 })
+    const seen = changes.length
+
+    await expect(table.update('a', () => {
+      throw new StorageError('closed', 'caller callback failure')
+    })).rejects.toMatchObject({ name: 'StorageError', code: 'closed' })
+
+    expect(table.get('a')).toEqual({ label: 'original', count: 1 })
+    await expect(facility.open(spec)).rejects.toMatchObject({ code: 'already-open' })
+    await table.put('b', { label: 'later', count: 2 })
+    expect(table.get('b')).toEqual({ label: 'later', count: 2 })
+    expect(changes).toHaveLength(seen + 1)
+    await domain.close()
+  })
+
+  it('retires and releases a terminal backend unit before reopening the domain', async () => {
+    const ctx = new Context()
+    await ctx.plugin(Storage)
+    const medium = new Map<string, unknown>()
+    const closeStarted = Promise.withResolvers<undefined>()
+    const releaseClose = Promise.withResolvers<undefined>()
+    let active = false
+    let opened = 0
+    let closeCalls = 0
+    ctx.storage.backend.register('terminal', {
+      kv: {
+        open: async () => {
+          if (active) throw new Error('backend unit slot is still reserved')
+          active = true
+          const ordinal = ++opened
+          let terminal = false
+          let released = false
+          let closing: Promise<void> | undefined
+          const assertOpen = () => {
+            if (terminal || released) throw new StorageError('closed', 'terminal unit is closed')
+          }
+          return {
+            loadAll: async () => ({ tables: { items: Object.fromEntries(medium) }, global: null }),
+            putRecord: async (_table, key, value) => {
+              assertOpen()
+              if (ordinal === 1) {
+                terminal = true
+                throw new StorageError('closed', 'injected terminal unit failure')
+              }
+              medium.set(key, value)
+            },
+            deleteRecord: async (_table, key) => {
+              assertOpen()
+              medium.delete(key)
+            },
+            setGlobal: async () => { assertOpen() },
+            close: () => {
+              closing ??= (async () => {
+                closeCalls += 1
+                if (ordinal === 1) {
+                  closeStarted.resolve(undefined)
+                  await releaseClose.promise
+                }
+                released = true
+                active = false
+              })()
+              return closing
+            },
+          }
+        },
+      },
+      close: async () => {},
+    })
+    const facility = new DomainFacility(ctx, { backend: 'terminal' })
+    ctx.storage.mount('domain', facility)
+    const changes: DomainChanged[] = []
+    ctx.on('domain/changed', (change) => { changes.push(change) })
+
+    const domain = await facility.open(spec)
+    const table = domain.table('items')
+    const failed = table.put('first', { label: 'first', count: 1 })
+    const queued = table.put('queued', { label: 'queued', count: 2 })
+    let failedSettled = false
+    void failed.then(
+      () => { failedSettled = true },
+      () => { failedSettled = true },
+    )
+    try {
+      await vi.waitFor(() => { expect(closeCalls).toBe(1) })
+      await closeStarted.promise
+      expect(failedSettled).toBe(false)
+      expect(() => table.get('first')).toThrow(/closed/)
+      await expect(table.put('later', { label: 'later', count: 3 })).rejects.toMatchObject({ code: 'closed' })
+      await expect(facility.open(spec)).rejects.toMatchObject({ code: 'already-open' })
+      const explicitClose = domain.close()
+
+      releaseClose.resolve(undefined)
+      await expect(failed).rejects.toMatchObject({ name: 'StorageError', code: 'closed' })
+      await expect(queued).rejects.toMatchObject({ name: 'DomainError', code: 'closed' })
+      await explicitClose
+      expect(closeCalls).toBe(1)
+      expect(active).toBe(false)
+      expect(changes).toEqual([])
+      expect(medium.size).toBe(0)
+
+      const reopened = await facility.open(spec)
+      await reopened.table('items').put('fresh', { label: 'fresh', count: 4 })
+      expect(reopened.table('items').get('fresh')).toEqual({ label: 'fresh', count: 4 })
+      expect(changes).toEqual([{
+        domain: 'demo',
+        table: 'items',
+        key: 'fresh',
+        operation: 'put',
+        value: { label: 'fresh', count: 4 },
+      }])
+      await Promise.all([domain.close(), domain.close()])
+      expect(closeCalls).toBe(1)
+      expect(facility.get('demo')).toBe(reopened)
+      await reopened.close()
+      expect(closeCalls).toBe(2)
+    } finally {
+      releaseClose.resolve(undefined)
+      await Promise.allSettled([failed, queued, domain.close()])
+    }
   })
 })
 

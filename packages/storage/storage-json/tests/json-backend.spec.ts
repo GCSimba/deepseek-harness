@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Storage, { storageBackendServiceKey } from '@deepseek-ai/dsh-storage'
 import InvariantRegistry from '@deepseek-ai/dsh-invariants'
@@ -9,7 +9,42 @@ import { runKvBackendContract } from '../../storage/tests/contract.ts'
 import { Config, JsonStorageBackend, apply } from '../src/index.ts'
 import * as InvariantCompanion from '../src/invariant.ts'
 
+const directorySyncFault = vi.hoisted(() => ({ enabled: false, closeFailure: false }))
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const original = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...original,
+    open: async (path: string, flags: string, mode?: number) => {
+      const handle = await original.open(path, flags, mode)
+      if (!directorySyncFault.enabled || flags !== 'r') return handle
+      return new Proxy(handle, {
+        get(target, property, receiver): unknown {
+          if (property === 'sync') {
+            return async () => { throw new Error('injected parent-directory sync failure') }
+          }
+          if (property === 'close' && directorySyncFault.closeFailure) {
+            return async () => {
+              await target.close()
+              throw new Error('injected parent-directory close failure')
+            }
+          }
+          const value: unknown = Reflect.get(target, property, receiver)
+          return typeof value === 'function'
+            ? (...args: unknown[]): unknown => Reflect.apply(value, target, args) as unknown
+            : value
+        },
+      })
+    },
+  }
+})
+
 const roots: string[] = []
+
+function errorCode(error: unknown): unknown {
+  if (typeof error !== 'object' || error === null) return undefined
+  return Reflect.get(error, 'code') as unknown
+}
 
 async function freshRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'dsh-storage-json-'))
@@ -107,6 +142,97 @@ describe('json backend specifics', () => {
     const text = await readFile(path, 'utf8')
     expect(text).not.toContain('rejected')
     await backend.close()
+  })
+
+  it('retires the unit when directory durability fails after publication', async () => {
+    const root = await freshRoot()
+    const backend = new JsonStorageBackend(root)
+    const unit = await backend.kv.open(descriptor)
+    const path = join(root, 'shape.json')
+    let restorePlatform = () => {}
+    try {
+      await unit.putRecord('t', 'k', { value: 'old' })
+      // Only the POSIX directory-sync branch is forced; temp creation,
+      // replacement, and target reads still use the real filesystem.
+      const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('linux')
+      restorePlatform = () => { platform.mockRestore() }
+      directorySyncFault.enabled = true
+      directorySyncFault.closeFailure = true
+      const failure = await unit.putRecord('t', 'k', { value: 'new' }).then(
+        () => undefined,
+        (error: unknown) => error,
+      )
+      directorySyncFault.enabled = false
+      directorySyncFault.closeFailure = false
+      restorePlatform()
+      restorePlatform = () => {}
+
+      const memoryAfterFailure = await unit.loadAll().then(
+        value => ({ status: 'resolved' as const, value }),
+        (error: unknown) => ({ status: 'rejected' as const, error }),
+      )
+      const diskAfterFailure = JSON.parse(await readFile(path, 'utf8')) as unknown
+      const laterWrite = await unit.putRecord('t', 'later', { value: true }).then(
+        () => ({ status: 'resolved' as const }),
+        (error: unknown) => ({ status: 'rejected' as const, error }),
+      )
+      const diskAfterLaterWrite = JSON.parse(await readFile(path, 'utf8')) as unknown
+
+      expect({
+        failure: failure instanceof Error
+          ? {
+            name: failure.name,
+            code: errorCode(failure),
+            causeName: failure.cause instanceof Error ? failure.cause.name : undefined,
+            rootCause: failure.cause instanceof Error && failure.cause.cause instanceof Error
+              ? failure.cause.cause.message
+              : undefined,
+          }
+          : failure,
+        memoryAfterFailure: memoryAfterFailure.status === 'rejected'
+          ? { status: memoryAfterFailure.status, code: errorCode(memoryAfterFailure.error) }
+          : memoryAfterFailure,
+        diskAfterFailure,
+        laterWrite: laterWrite.status === 'rejected'
+          ? { status: laterWrite.status, code: errorCode(laterWrite.error) }
+          : laterWrite,
+        diskAfterLaterWrite,
+      }).toEqual({
+        failure: {
+          name: 'StorageError',
+          code: 'closed',
+          causeName: 'PublishedWriteDurabilityError',
+          rootCause: 'injected parent-directory sync failure',
+        },
+        memoryAfterFailure: { status: 'rejected', code: 'closed' },
+        diskAfterFailure: {
+          unit: { name: 'shape', version: 1 },
+          global: null,
+          tables: { t: { k: { value: 'new' } } },
+        },
+        laterWrite: { status: 'rejected', code: 'closed' },
+        diskAfterLaterWrite: {
+          unit: { name: 'shape', version: 1 },
+          global: null,
+          tables: { t: { k: { value: 'new' } } },
+        },
+      })
+
+      const reopened = await backend.kv.open(descriptor)
+      expect(await reopened.loadAll()).toEqual({
+        tables: { t: { k: { value: 'new' } } },
+        global: null,
+      })
+      await reopened.putRecord('t', 'later', { value: true })
+      expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({
+        tables: { t: { k: { value: 'new' }, later: { value: true } } },
+      })
+    } finally {
+      directorySyncFault.enabled = false
+      directorySyncFault.closeFailure = false
+      restorePlatform()
+      await backend.close()
+    }
   })
 
   it('rejects undeclared table and global access as caller errors', async () => {
