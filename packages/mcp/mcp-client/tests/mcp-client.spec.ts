@@ -255,6 +255,22 @@ describe('syncTools', () => {
     expect(ctx.tools.get('mcp__srv__stable')).toBeDefined()
   })
 
+  it('rejects a repeated tools/list continuation cursor without replacing the previous generation', async () => {
+    const client = createMockClient([{ name: 'stable', inputSchema: { type: 'object' } }])
+    const previous = await syncTools(client as never, ctx, defaultOpts, new Map())
+    client.listTools.mockReset()
+    client.listTools
+      .mockResolvedValueOnce({ tools: [], nextCursor: 'same-cursor' })
+      .mockResolvedValueOnce({ tools: [], nextCursor: 'same-cursor' })
+      .mockRejectedValueOnce(new Error('sentinel: pagination continued'))
+
+    await expect(syncTools(client as never, ctx, defaultOpts, previous))
+      .rejects.toThrow(/repeated a tools\/list continuation cursor/)
+
+    expect(client.listTools).toHaveBeenCalledTimes(2)
+    expect(ctx.tools.get('mcp__srv__stable')).toBeDefined()
+  })
+
   it('rolls back the whole generation when a foreign tool squats on the namespace', async () => {
     // A foreign registration occupies one of this server's public names.
     ctx.tools.register({

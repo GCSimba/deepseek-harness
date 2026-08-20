@@ -62,7 +62,7 @@ MCP 客户端桥接插件：连接外部 [Model Context Protocol](https://modelc
 ## 行为
 
 - 连接时：插件激活会等待 `listTools()`，并在组合开始首个轮次前通过 `ctx.tools.register()` 以公开名称注册每个工具。初始连接、发现或注册失败始终会记录日志；`failOnStartupError` 为 true 时拒绝激活，否则插件仍会激活但不注册工具。
-- 监听 `notifications/tools/list_changed` → 重新同步；获取阶段失败时保留上一世代的注册，注册冲突则会回滚本次尝试的世代，并且不保留该服务器的任何工具。
+- 监听 `notifications/tools/list_changed` → 重新同步；获取阶段失败时保留上一世代的注册，注册冲突则会回滚本次尝试的世代，并且不保留该服务器的任何工具。重复的非空 `tools/list` continuation cursor 属于无效发现响应，会在获取阶段失败，而不是无限请求后续页面。
 - 工具执行：`client.callTool({ name: rawName, arguments }, { signal })`，支持超时 + 中止；公开名称绝不会发给服务器。
 - 规范成功值是 `{ content: JsonValue[], structuredContent? }`；完整的 JSON MCP 块会保留给编程调用方。受支持且已声明的 `outputSchema` 会验证 `structuredContent`；不受支持的 schema 词汇会回退为不受约束的 `JsonValue`。
 - Native／模型渲染会保留 MCP 块顺序。文本类连续块以换行连接；资源链接以文本保留名称和 URI；只有挂载 `ctx.attachments` 且确切调用模型路由明确声明支持图片输入时，受支持的图片才会成为持久核心图片块。整个图片批次会先完成解码与准入，再保存任一成员。格式错误或被拒绝的图片批次、音频、嵌入资源和不受支持的块会成为明确诊断文本，而不会消失。

@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-21-mcp-tools-list-repeated-cursor.md
+2026-08-21-mcp-tools-list-repeated-cursor.md: bfbfb20f5f78fbe2395469dfca18ab4f10afe2a1
+2026-08-21-mcp-tools-list-repeated-cursor.zh.md: cd61ddc9cfadd9c9c52623371c4d4f1b2917ba60
