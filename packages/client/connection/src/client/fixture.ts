@@ -2028,7 +2028,7 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
   /** Force-enders for currently open stream generators (timing hook: simulated connection loss). */
   const streamBreakers = new Set<() => void>()
   /** Retry scenarios opened by timing hooks and completed in a later browser assertion phase. */
-  const retryScenarios = new Map<SessionId, { turn: number; stepStarted: boolean }>()
+  const retryScenarios = new Map<SessionId, { turn: number; stepStarted: boolean; retryId: string }>()
   /** The single opt-in browser stress producer; normal fixture journeys never start it. */
   let activeReasoningChunkStorm: ReasoningChunkStormState | null = null
 
@@ -2139,7 +2139,11 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
       const sessionId = sid(id)
       const turn = nextTurn.get(sessionId) ?? 0
       nextTurn.set(sessionId, turn + 1)
-      retryScenarios.set(sessionId, { turn, stepStarted: true })
+      retryScenarios.set(sessionId, {
+        turn,
+        stepStarted: true,
+        retryId: `fixture-retry-${sessionId}-${String(turn)}`,
+      })
       setRunning(sessionId, true)
       append(sessionId, { type: 'turn/start', data: { turn } })
       append(sessionId, { type: 'user/message', surfaceOp: 'append', data: { content: text('请重试这个请求'), source: { kind: 'user' } } })
@@ -2161,6 +2165,7 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
       append(sessionId, {
         type: 'llm/retry',
         data: {
+          retryId: scenario.retryId,
           turn: scenario.turn, step: 1,
           provider: 'fixture', mode: 'normal', policyKey: 'fixture-normal',
           retry, maxRetries: 2, delayMs, failure,
@@ -2177,6 +2182,7 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
       append(sessionId, {
         type: 'llm/retry',
         data: {
+          retryId: scenario.retryId,
           turn: scenario.turn, step: 1,
           provider: 'fixture', mode: 'normal', policyKey: 'fixture-normal',
           retry: 1, maxRetries: 2, delayMs, failure,
@@ -2210,6 +2216,25 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
       })
       append(sessionId, { type: 'step/end', data: { turn: scenario.turn, step: 1 } })
       append(sessionId, { type: 'turn/end', data: { turn: scenario.turn, reason: { kind: 'completed' } } })
+      setRunning(sessionId, false)
+    },
+    /** Exhaust the open retry chain with a durable terminal failure. */
+    exhaustModelRetry(id: string): void {
+      const sessionId = sid(id)
+      const scenario = retryScenarios.get(sessionId)
+      if (scenario === undefined) throw new Error(`fixture: no model retry scenario for ${id}`)
+      retryScenarios.delete(sessionId)
+      append(sessionId, { type: 'step/end', data: { turn: scenario.turn, step: 1 } })
+      append(sessionId, {
+        type: 'turn/end',
+        data: {
+          turn: scenario.turn,
+          reason: {
+            kind: 'error',
+            error: { code: 'SERVER', message: 'fixture upstream unavailable' },
+          },
+        },
+      })
       setRunning(sessionId, false)
     },
     /** Log append WITHOUT the mux emit: a frame lost in transit — history still serves it, the client must repull. */

@@ -33,6 +33,7 @@ interface TimingHooks {
   scheduleModelRetry(id: string, retry?: number, delayMs?: number): void
   cancelModelRetryDuringBackoff(id: string, delayMs?: number): void
   completeModelRetry(id: string): void
+  exhaustModelRetry(id: string): void
   appendSilent(id: string, msg: string): void
   breakStreams(): void
 }
@@ -912,6 +913,10 @@ describe('createFixtureApi', () => {
     hooks.completeModelRetry('fx-alpha')
     hooks.beginModelRetry('fx-alpha')
     hooks.cancelModelRetryDuringBackoff('fx-alpha')
+    hooks.beginModelRetry('fx-alpha')
+    hooks.scheduleModelRetry('fx-alpha', 1)
+    hooks.scheduleModelRetry('fx-alpha', 2)
+    hooks.exhaustModelRetry('fx-alpha')
     await vi.waitFor(() => {
       expect(seen.some(f => f.type === 'session/event' && JSON.stringify(f.event.data).includes('正常直播'))).toBe(true)
       expect(seen.some(f => f.type === 'session/event' && (f.event as { type: string }).type === 'llm/retry')).toBe(true)
@@ -919,6 +924,11 @@ describe('createFixtureApi', () => {
       expect(seen.some(f => f.type === 'session/event'
         && f.event.type === 'turn/end'
         && f.event.data.reason.kind === 'aborted')).toBe(true)
+      expect(seen.some(f => f.type === 'session/event'
+        && f.event.type === 'turn/end'
+        && f.event.data.reason.kind === 'error'
+        && f.event.data.reason.error.code === 'SERVER'
+        && f.event.data.reason.error.message === 'fixture upstream unavailable')).toBe(true)
       expect(seen.some(f => f.type === 'session/projection' && f.key === 'title' && f.value === 'Fixture 修订标题')).toBe(true)
     })
     expect(seen.some(f => f.type === 'session/event' && JSON.stringify(f.event.data).includes('静默丢帧'))).toBe(false)

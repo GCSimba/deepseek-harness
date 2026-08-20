@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type {
   ChatConversationViewNode, ChatSnapshot, ConversationEventInput,
   ConversationNodeDefinition, ConversationViewDefinition,
@@ -13,7 +13,9 @@ import { nextStepInboxDefinition, nextTurnInboxDefinition } from '../src/client/
 import { messageDefinition } from '../src/client/conversation-nodes/message.ts'
 import { retryDefinition } from '../src/client/conversation-nodes/retry.ts'
 import { toolDefinition } from '../src/client/conversation-nodes/tool.ts'
-import { turnErrorDefinition } from '../src/client/conversation-nodes/turn-error.ts'
+import {
+  registerTurnErrorConversationNode, turnErrorDefinition,
+} from '../src/client/conversation-nodes/turn-error.ts'
 import { turnMaxTokensDefinition } from '../src/client/conversation-nodes/turn-max-tokens.ts'
 import { turnTailDefinition } from '../src/client/conversation-nodes/turn-tail.ts'
 import type {
@@ -688,7 +690,10 @@ describe('built-in conversation node Definitions', () => {
     const retryNode = node(snapshot(retry), 'model-retry')
     const retryData = retryNode?.data as RetryChatData
     expect(retryData.attempts.map(attempt => attempt.retryState)).toEqual(['started', 'cancelled'])
-    expect(node(snapshot(retry), 'turn-error')).toBeUndefined()
+    expect(node(snapshot(retry), 'turn-error')?.data).toMatchObject({
+      message: 'failed',
+      code: 'TRANSPORT',
+    })
 
     const compactions = assembler([
       at(10, 'command/run', {
@@ -872,7 +877,7 @@ describe('built-in conversation node Definitions', () => {
     expect(node(snapshot(value), 'tool-call')).toBeUndefined()
   })
 
-  it('suppresses a turn error when the loaded tail contains only a later retry attempt', () => {
+  it('materializes a retry-exhausted turn error from a loaded tail', () => {
     const value = assembler([
       at(5, 'llm/retry', {
         retryId: 'retry-paged',
@@ -894,7 +899,10 @@ describe('built-in conversation node Definitions', () => {
     ], true)
 
     expect(node(snapshot(value), 'model-retry')).toBeUndefined()
-    expect(node(snapshot(value), 'turn-error')).toBeUndefined()
+    expect(node(snapshot(value), 'turn-error')?.data).toMatchObject({
+      message: 'failed',
+      code: 'TRANSPORT',
+    })
 
     value.prepend([
       at(1, 'turn/start', { turn: 1 }),
@@ -919,7 +927,91 @@ describe('built-in conversation node Definitions', () => {
 
     const retry = node(snapshot(value), 'model-retry')
     expect((retry?.data as RetryChatData).attempts).toHaveLength(2)
+    expect(node(snapshot(value), 'turn-error')?.data).toMatchObject({
+      message: 'failed',
+      code: 'TRANSPORT',
+    })
+  })
+
+  it('does not materialize a turn error from retry evidence without a terminal failure', () => {
+    const value = assembler([
+      at(1, 'turn/start', { turn: 1 }),
+      at(2, 'step/start', { turn: 1, step: 1 }),
+      at(3, 'llm/retry', {
+        retryId: 'retry-open',
+        turn: 1,
+        step: 1,
+        provider: 'fake',
+        mode: 'normal',
+        policyKey: 'fake-normal',
+        retry: 1,
+        maxRetries: 2,
+        delayMs: 10,
+        failure: { code: 'TRANSPORT', message: 'retryable' },
+      }),
+    ])
+
+    expect(node(snapshot(value), 'model-retry')).toBeDefined()
     expect(node(snapshot(value), 'turn-error')).toBeUndefined()
+  })
+
+  it('keeps turn-error matching and fallback limited to terminal failures', () => {
+    const match = (event: unknown, location?: unknown) => ({
+      event,
+      view: undefined,
+      role: 'update',
+      location,
+    }) as unknown as Parameters<typeof turnErrorDefinition.update>[1]
+    const context = (state: unknown, matches: unknown[] = [], start?: unknown) => ({
+      key: 'turn-error:1',
+      kind: 'turn-error',
+      id: '1',
+      matches,
+      start,
+      state,
+      current: new Map(),
+    }) as unknown as Parameters<NonNullable<typeof turnErrorDefinition.buildViewNode>>[0]
+    const stateContext = (state: ReturnType<typeof turnErrorDefinition.start>) =>
+      context(state) as Parameters<typeof turnErrorDefinition.update>[0]
+    const event = (type: string, data: unknown, seq = 1) => ({
+      type, data, seq, time: seq * 1_000,
+    })
+    const completed = match(event('turn/end', { turn: 1, reason: { kind: 'completed' } }))
+    const started = match(event('turn/start', { turn: 1 }))
+
+    expect(turnErrorDefinition.match(event('turn/start', { turn: 1 }) as never))
+      .toEqual({ id: '1', role: 'start' })
+    expect(turnErrorDefinition.match(completed.event)).toBeNull()
+    expect(turnErrorDefinition.match(event('user/message', {}) as never)).toBeNull()
+    expect(() => turnErrorDefinition.start(context(undefined), completed, { previous: () => undefined }))
+      .toThrow('turn-error start requires turn/start')
+
+    const initial = turnErrorDefinition.start(context(undefined), started, { previous: () => undefined })
+    expect(turnErrorDefinition.update(stateContext(initial), completed)).toBe(initial)
+    expect(turnErrorDefinition.buildViewNode?.(context(initial))).toBeNull()
+    expect(turnErrorDefinition.buildViewNode?.(context(undefined))).toBeNull()
+    expect(turnErrorDefinition.buildViewNode?.(context(undefined, [started]))).toBeNull()
+    expect(turnErrorDefinition.buildViewNode?.(context(undefined, [completed]))).toBeNull()
+
+    const failure = match(event('turn/end', {
+      turn: 1,
+      reason: { kind: 'error', error: { message: 'terminal' } },
+    }, 5), { kind: 'unresolved' })
+    const fallback = turnErrorDefinition.buildViewNode?.(context(undefined, [failure]))
+    expect(fallback?.data).toMatchObject({ message: 'terminal', step: 0 })
+    expect(fallback?.data).not.toHaveProperty('code')
+
+    const failedState = turnErrorDefinition.update(stateContext(initial), failure)
+    const turnLocation = { kind: 'turn', turn: { steps: [] } }
+    const stepLocation = { kind: 'step', turn: { steps: [{ step: 4 }] } }
+    expect(turnErrorDefinition.buildViewNode?.(context(failedState, [failure], match(started.event, turnLocation)))?.data)
+      .toMatchObject({ step: 0 })
+    expect(turnErrorDefinition.buildViewNode?.(context(failedState, [failure], match(started.event, stepLocation)))?.data)
+      .toMatchObject({ step: 4 })
+
+    const register = vi.fn()
+    registerTurnErrorConversationNode({ conversationEvents: { register } } as never)
+    expect(register).toHaveBeenCalledWith(turnErrorDefinition)
   })
 
   it('materializes a max-tokens notice and keeps completed and error turns clean', () => {

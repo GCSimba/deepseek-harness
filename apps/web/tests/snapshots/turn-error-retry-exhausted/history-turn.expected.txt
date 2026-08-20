@@ -1,0 +1,4 @@
+dot=error
+title=This turn failed
+message=fixture upstream unavailable
+code=SERVER
