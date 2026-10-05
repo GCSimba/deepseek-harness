@@ -1,0 +1,10 @@
+- dialog "插件安装中…":
+  - button "取消安装并返回编辑"
+  - button "取消安装并关闭"
+  - status: 插件安装中…
+  - paragraph: https://cdn.example.test/plugin.tgz?token=probe&download=1
+  - paragraph: 压缩包
+  - button "收起安装详情" [expanded]
+  - button "取消安装"
+  - paragraph: 安装位置：{{profile}}
+  - text: 运行中 $ pnpm add https://cdn.example.test/plugin.tgz?token=probe&download=1 Waiting for tarball download
