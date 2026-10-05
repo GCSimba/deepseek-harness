@@ -1,5 +1,5 @@
 /** Linux association parsing over isolated installed-entry fixtures and an injected OS command runner. */
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, rename, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
@@ -19,8 +19,25 @@ async function fixture() {
     stdout: command === 'gio' && args[0] === 'info' ? '  standard::content-type: audio/mpeg\n'
       : command === 'env' ? 'Default application for audio/mpeg: player.desktop\nRegistered applications:\n  player.desktop\n  nested-other.desktop\n  missing.desktop\nRecommended applications:\n  player.desktop\n' : '', stderr: '',
   }))
-  return { root, run, facts: { platform: 'linux' as const, osRelease: 'linux', env: { XDG_DATA_HOME: root, XDG_DATA_DIRS: '', LANG: 'zh_CN.UTF-8' }, run } }
+  return { root, run, facts: { platform: 'linux' as const, osRelease: 'linux', env: { XDG_DATA_HOME: root, XDG_DATA_DIRS: join(root, 'absent'), LANG: 'zh_CN.UTF-8' }, run } }
 }
+
+it('queries and launches user handlers with an empty XDG_DATA_HOME', async () => {
+  const { root, facts, run } = await fixture()
+  const data = join(root, '.local', 'share')
+  await mkdir(data, { recursive: true })
+  await rename(join(root, 'applications'), join(data, 'applications'))
+  await rename(join(root, 'pixmaps'), join(data, 'pixmaps'))
+  const internals = { ...facts, env: { ...facts.env, HOME: root, XDG_DATA_HOME: '' } }
+  const signal = new AbortController().signal
+  const application = join(data, 'applications', 'player.desktop')
+  expect(await nativeFileApplications('/file.mp3', signal, internals)).toEqual([
+    { id: application, name: '播放器', default: true, icon: expect.stringMatching(/^data:image\/svg\+xml;base64,/) as string },
+    { id: join(data, 'applications', 'nested', 'other.desktop'), name: 'Other', default: false, icon: null },
+  ])
+  await openNativeFileApplication('/file.mp3', application, signal, internals)
+  expect(run).toHaveBeenLastCalledWith('gio', ['launch', application, '/file.mp3'], signal, 'hidden')
+})
 
 it('deduplicates GIO handlers, resolves nested ids, localizes names, and reuses desktop artwork', async () => {
   const { root, facts, run } = await fixture()

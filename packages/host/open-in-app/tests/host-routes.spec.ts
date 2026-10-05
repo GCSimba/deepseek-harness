@@ -390,7 +390,7 @@ describe('open-in-app host routes (real Loader composition)', () => {
     expect(await (await fetch(`${emptyBase}/open-in-app/apps`)).json()).toEqual({ apps: [] })
   })
 
-  it('serves a Linux catalog resolved in-process and its desktop-entry SVG icon', async () => {
+  it.each(['unset', 'empty'] as const)('serves a Linux catalog and its desktop-entry SVG icon with %s XDG_DATA_HOME', async (dataHome) => {
     const home = await mkdtemp(join(tmpdir(), 'dsh-open-in-app-home-'))
     const workspace = join(home, 'workspace')
     await mkdir(workspace, { recursive: true })
@@ -407,7 +407,7 @@ describe('open-in-app host routes (real Loader composition)', () => {
     internals.catalog = {
       platform: 'linux',
       home,
-      env: { XDG_DATA_DIRS: join(home, 'xdg-empty'), DISPLAY: ':0' },
+      env: { XDG_DATA_HOME: dataHome === 'empty' ? '' : undefined, XDG_DATA_DIRS: join(home, 'xdg-empty'), DISPLAY: ':0' },
       run: () => Promise.reject(new Error('fixture rejects')),
       launch,
       resolveExecutable: pathTable({ 'xdg-open': '/usr/bin/xdg-open', code: '/usr/bin/code' }),

@@ -51,6 +51,8 @@ const { stdout, stderr } = await runNativeCommand('osascript', ['-e', script], s
 
 `nativeFileApplications(path, signal)` 返回关联应用、本地化名称、图标和当前默认项。macOS 12 及以上版本使用 LaunchServices，Windows 使用 Shell 关联处理器并在提取前解析打包应用的间接图标引用，Linux 使用 GIO，并共用 XDG 桌面文件和图标读取逻辑。macOS 上 bundle 标识符与显示名都相同的多份拷贝（自更新暂存副本、按版本安装的拷贝）合并为系统默认项，否则保留最高版本；显示名不同的并存安装两项都保留。`openNativeFileApplication(path, application, signal)` 按完整的当前注册列表重新验证关联应用，展示列表中被合并掉的拷贝仍可打开，且不修改系统默认值。Windows 交给 Shell 启动应用，Linux 交给 `gio launch` 展开参数。WSL 转换路径后使用 Windows 适配器。调用方负责验证本地文件路径。原生集成测试分别在相应平台使用独立的 Windows 文件关联和 Linux XDG 目录。
 
+Linux 桌面文件与命名图标遵循 [XDG 数据目录规则](https://specifications.freedesktop.org/basedir/latest/)：`XDG_DATA_HOME` 未设置或为空时使用 `$HOME/.local/share`，`XDG_DATA_DIRS` 未设置或为空时使用 `/usr/local/share:/usr/share`。用户数据目录优先于系统目录，非空的覆盖值保持声明的目录顺序。
+
 -----
 
 <a id="understand-the-implementation"></a>

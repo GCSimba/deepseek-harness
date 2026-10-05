@@ -28,13 +28,14 @@ export function desktopEntryFields(text: string): Readonly<Record<string, string
 
 /**
  * Resolve XDG application and icon roots in desktop precedence order.
+ * Unset or empty variables use the freedesktop defaults.
  * @param home - user's home directory.
  * @param env - desktop environment values.
  * @returns data-home followed by system data directories.
  */
 export function desktopDataDirectories(home: string, env: Readonly<Record<string, string | undefined>>): readonly string[] {
-  return [env.XDG_DATA_HOME ?? join(home, '.local', 'share'),
-    ...(env.XDG_DATA_DIRS ?? '/usr/local/share:/usr/share').split(':').filter(Boolean)]
+  return [env.XDG_DATA_HOME || join(home, '.local', 'share'),
+    ...(env.XDG_DATA_DIRS || '/usr/local/share:/usr/share').split(':').filter(Boolean)]
 }
 
 /** Read an installed PNG or SVG icon; absent paths and directories have no pixels. */
