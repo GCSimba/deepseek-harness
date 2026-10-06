@@ -6,9 +6,9 @@
  * host application is touched.
  */
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { tmpdir, release as osRelease } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { NativeCommandRunner } from '@deepseek-ai/dsh-native-command'
 import { OPEN_IN_APP_CATALOG, type OpenInAppApp } from '../src/catalog.ts'
 import {
@@ -16,6 +16,11 @@ import {
   resolveLaunch, resolveOpenInAppApps, xdgDataDirectories,
   type OpenInAppInternals, type OpenInAppLauncher, type OpenInAppResolvedLaunch,
 } from '../src/resolver.ts'
+
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>()
+  return { ...actual, release: vi.fn(actual.release) }
+})
 
 const TIMEOUT_MS = 5_000
 
@@ -130,6 +135,8 @@ describe('resolveOpenInAppApps', () => {
   })
 
   it('does not offer the Linux file manager without a desktop session', async () => {
+    const release = vi.mocked(osRelease).mockReturnValue('6.8.0-generic')
+    onTestFinished(() => { release.mockRestore() })
     const home = await tempRoot()
     const resolveExecutable = pathTable({ 'xdg-open': '/usr/bin/xdg-open' })
     await expect(resolveLaunch(byId('filemanager'), TIMEOUT_MS, bare({

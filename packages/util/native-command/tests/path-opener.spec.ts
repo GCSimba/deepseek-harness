@@ -20,6 +20,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { canOpenNativePath, nativeFileManager, revealNativePath, openNativeAssociatedPath, openNativePath, openNativeTextFile, type PathOpenerRunner } from '../src/index.ts'
 
 const signal = () => new AbortController().signal
+const ambientWsl = [process.env.WSL_DISTRO_NAME, process.env.WSL_INTEROP]
+  .some(value => value !== undefined && value !== '')
+  || osRelease().toLowerCase().includes('microsoft')
 
 beforeEach(() => { execFileMock.mockReset() })
 
@@ -176,9 +179,6 @@ describe('native path opener', () => {
   })
 
   it('samples ambient WSL markers and kernel release when no fact overrides are supplied', async () => {
-    const ambientWsl = [process.env.WSL_DISTRO_NAME, process.env.WSL_INTEROP]
-      .some(value => value !== undefined && value !== '')
-      || osRelease().toLowerCase().includes('microsoft')
     const run = vi.fn<PathOpenerRunner>(async command => command === 'wslpath'
       ? { stdout: 'C:\\settings.yaml\n', stderr: '' }
       : { stdout: '', stderr: '' })
@@ -416,15 +416,21 @@ describe('native file manager', () => {
     await expect(revealNativePath('/file', AbortSignal.abort(new Error('cancelled')), { run })).rejects.toThrow('cancelled')
     expect(run).not.toHaveBeenCalled()
     await expect(revealNativePath('/file', signal(), { platform: 'darwin', run })).rejects.toThrow('desktop failed')
-    expect(nativeFileManager()).toBe(process.platform === 'darwin' ? 'finder' : process.platform === 'win32' ? 'explorer' : 'directory')
+    const expected = process.platform === 'darwin' ? 'finder'
+      : process.platform === 'win32' || ambientWsl ? 'explorer' : 'directory'
+    expect(nativeFileManager()).toBe(expected)
   })
 })
 
 
 it('uses the native runner for a file-manager handoff when none is injected', async () => {
-  execFileMock.mockImplementation((_command, _args, _options, callback) => { callback(null, '', '') })
+  execFileMock.mockImplementation((command, _args, _options, callback) => {
+    callback(null, command === 'wslpath' ? 'C:\\work\\report.txt\n' : '', '')
+  })
   await revealNativePath('/tmp/report.txt', signal())
-  expect(execFileMock).toHaveBeenCalled()
+  const command = process.platform === 'darwin' ? 'open'
+    : process.platform === 'win32' || ambientWsl ? 'explorer.exe' : 'xdg-open'
+  expect(execFileMock.mock.calls.at(-1)?.[0]).toBe(command)
 })
 
 

@@ -1,11 +1,15 @@
 /** File association results and explicit handler authorization at the native command adapter. */
 import { readFile } from 'node:fs/promises'
+import { release as osRelease } from 'node:os'
 import { describe, expect, it, vi, onTestFinished } from 'vitest'
 import * as runner from '../src/runner.ts'
 import { nativeFileApplications, openNativeFileApplication } from '../src/file-applications.ts'
 
 const application = { id: '/Applications/Music.app', name: 'Music', default: true, icon: null }
 const signal = new AbortController().signal
+const ambientWsl = [process.env.WSL_DISTRO_NAME, process.env.WSL_INTEROP]
+  .some(value => value !== undefined && value !== '')
+  || osRelease().toLowerCase().includes('microsoft')
 
 describe('native file associations', () => {
   it('passes file paths as arguments and preserves the desktop default', async () => {
@@ -109,10 +113,15 @@ describe('native file associations', () => {
 
 it('uses the production command adapter and current platform when no override is supplied', async () => {
   const run = vi.spyOn(runner, 'runNativeCommand').mockImplementation(async command => ({
-    stdout: command === 'gio' ? 'standard::content-type: audio/mpeg' : command === 'env' ? 'No applications found' : JSON.stringify([application]), stderr: '',
+    stdout: command === 'gio' ? 'standard::content-type: audio/mpeg'
+      : command === 'env' ? 'No applications found'
+        : command === 'wslpath' ? 'C:\\file.mp3\n' : JSON.stringify([application]), stderr: '',
   }))
   onTestFinished(() => { run.mockRestore() })
-  expect(await nativeFileApplications('/file.mp3', signal)).toEqual(process.platform === 'linux' ? [] : [application])
+  expect(await nativeFileApplications('/file.mp3', signal)).toEqual(process.platform === 'linux' && !ambientWsl ? [] : [application])
+  const query = process.platform === 'linux' ? ambientWsl ? 'wslpath' : 'gio'
+    : process.platform === 'win32' ? 'powershell.exe' : 'osascript'
+  expect(run.mock.calls[0]?.[0]).toBe(query)
   await openNativeFileApplication('/file.mp3', application.id, signal, { platform: 'darwin' })
   expect(run).toHaveBeenLastCalledWith('open', ['-a', application.id, '/file.mp3'], signal, 'hidden')
 })
@@ -173,13 +182,13 @@ it('uses the Windows desktop for WSL paths and rejects an empty translation', as
 })
 
 
-it('uses production environment and runner defaults for Linux and WSL', async () => {
+it('uses the production runner with explicit Linux and WSL facts', async () => {
   const run = vi.spyOn(runner, 'runNativeCommand').mockImplementation(async command => ({
     stdout: command === 'gio' ? 'standard::content-type: audio/mpeg'
       : command === 'env' ? 'No applications found'
         : command === 'wslpath' ? 'C:\\file.mp3\n' : JSON.stringify([application]), stderr: '',
   }))
   onTestFinished(() => { run.mockRestore() })
-  expect(await nativeFileApplications('/file.mp3', signal, { platform: 'linux', osRelease: 'linux' })).toEqual([])
+  expect(await nativeFileApplications('/file.mp3', signal, { platform: 'linux', osRelease: 'linux', env: {} })).toEqual([])
   expect(await nativeFileApplications('/file.mp3', signal, { platform: 'linux', osRelease: 'microsoft', env: {} })).toEqual([application])
 })
