@@ -56,6 +56,8 @@ kind: "package-reference"
 
 ### 搜索行为
 
+两种搜索方法返回与精确读取相同的克隆 Session 头部元数据，包括存在时的 `origin: 'subagent'`。仅有父 Session id 不能区分 subagent 与普通 fork。
+
 `searchSessions` 搜索整个语料库，并按每个会话匹配最强的事件分组结果；`searchEvents` 搜索一个逻辑会话。查询是字面短语：首尾空白会被移除、内部空白会被规范化，引号、`OR`、`NEAR` 和 `*` 等 FTS5 语法被视为数据，绝不作为可执行查询语法。元数据过滤器（会话 id、cwd、创建时间、父级、可用性、事件 seq/时间/类型/表层）在排序前缩小结果。默认搜索全部 `current`、`shadowed` 与 `log-only` 事件；传入表层过滤器可缩小范围。
 
 排序是确定性的：实际 FTS5 高亮匹配 span 更多的在前，然后文档更短的在前，事件时间、会话 id 与 seq 打破平局。结果携带按 `snippetChars` 个 Unicode 码点截断的纯文本摘录，没有提供方专用数值分数。分页通过不透明 `SessionSearchCursor` 延续，游标绑定到规范化后的确切请求；相关语料库变化时游标变为陈旧（`SESSION_QUERY_STALE_CURSOR`），会话内游标可在不相关会话变化后延续，跨会话游标则不能。
@@ -105,7 +107,7 @@ kind: "package-reference"
 
 ### Schema 归属
 
-数据库携带 application id 与 schema 版本 8。打开时拒绝其他应用程序拥有的文件或规范数据库，拒绝未知用户表；只有已识别的不兼容派生 schema 才会原地重置——因此不相关或 session-persistence 数据库绝不会被触碰。在 POSIX 文件系统上，缺失的目录与数据库文件以仅所有者可访问的方式创建（进程 umask 前为 `0700` 与 `0600`）。每个派生索引路径在一个进程中只能由一个服务拥有；世代与 TEMP 遮蔽状态由连接持有。
+数据库携带 application id 与 schema 版本 9。打开时拒绝其他应用程序拥有的文件或规范数据库，拒绝未知用户表；只有已识别的不兼容派生 schema 才会原地重置——因此不相关或 session-persistence 数据库绝不会被触碰。在 POSIX 文件系统上，缺失的目录与数据库文件以仅所有者可访问的方式创建（进程 umask 前为 `0700` 与 `0600`）。每个派生索引路径在一个进程中只能由一个服务拥有；世代与 TEMP 遮蔽状态由连接持有。
 
 </details>
 
