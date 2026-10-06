@@ -8,10 +8,16 @@ export interface DesktopIcon {
   readonly contentType: 'image/png' | 'image/svg+xml'
 }
 
+function decodeDesktopString(value: string): string {
+  const escapes = { s: ' ', n: '\n', t: '\t', r: '\r', '\\': '\\' }
+  return value.replace(/\\([sntr\\])/g, (_match, escape: keyof typeof escapes) => escapes[escape])
+}
+
 /**
  * Read the main desktop-entry section without interpreting executable commands.
  * @param text - installed desktop-entry text.
- * @returns its literal field values; action sections are excluded.
+ * @returns display names and icons with desktop string escapes decoded once, other values
+ *   literal; action sections are excluded. Executable commands are not decoded.
  */
 export function desktopEntryFields(text: string): Readonly<Record<string, string>> {
   let main = false
@@ -21,7 +27,11 @@ export function desktopEntryFields(text: string): Readonly<Record<string, string
     if (trimmed.startsWith('[')) { main = trimmed === '[Desktop Entry]'; continue }
     if (!main || trimmed.startsWith('#')) continue
     const separator = trimmed.indexOf('=')
-    if (separator > 0) fields.set(trimmed.slice(0, separator).trim(), trimmed.slice(separator + 1).trim())
+    if (separator > 0) {
+      const key = trimmed.slice(0, separator).trim()
+      const value = trimmed.slice(separator + 1).trim()
+      fields.set(key, key === 'Icon' || /^Name(?:\[.*\])?$/.test(key) ? decodeDesktopString(value) : value)
+    }
   }
   return Object.fromEntries(fields)
 }

@@ -510,6 +510,18 @@ describe('registry and desktop parsing', () => {
     expect(execCommand('   ')).toBeNull()
   })
 
+  it('decodes desktop icon metadata without changing executable quoting', () => {
+    expect(parseDesktopEntry(String.raw`[Desktop Entry]
+Exec="/opt/App\\Name/bin" %f
+TryExec=/opt/viewer\scli
+Icon=viewer\sicon
+`)).toEqual({
+      exec: String.raw`"/opt/App\\Name/bin" %f`,
+      tryExec: String.raw`/opt/viewer\scli`,
+      icon: 'viewer icon',
+    })
+  })
+
   it('orders XDG data directories home-first with the freedesktop defaults', () => {
     const completed = { env: {}, home: '/h', resolveExecutable: pathTable() }
     // The home default goes through join(), so the expectation does too —

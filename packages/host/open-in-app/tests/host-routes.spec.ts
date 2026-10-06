@@ -396,9 +396,10 @@ describe('open-in-app host routes (real Loader composition)', () => {
     await mkdir(workspace, { recursive: true })
     const applications = join(home, '.local', 'share', 'applications')
     await mkdir(applications, { recursive: true })
-    const svg = join(home, 'code.svg')
+    const svg = join(home, 'code icon.svg')
     await writeFile(svg, '<svg/>')
-    await writeFile(join(applications, 'code.desktop'), `[Desktop Entry]\nExec=code\nIcon=${svg}\n`)
+    const encodedIcon = svg.replaceAll('\\', '\\\\').replaceAll(' ', '\\s')
+    await writeFile(join(applications, 'code.desktop'), `[Desktop Entry]\nExec=code\nIcon=${encodedIcon}\n`)
     const launches: string[][] = []
     const launch: OpenInAppLauncher = (command, args) => {
       launches.push([command, ...args])
