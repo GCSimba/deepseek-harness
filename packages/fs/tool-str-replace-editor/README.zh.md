@@ -46,6 +46,8 @@ kind: "package-reference"
 
 ### 命令
 
+唯一性包含重叠起点：`item\nitem\n` 在 `item\nitem\nitem\n` 中出现两次，因此 `str_replace` 拒绝编辑且不修改文件。
+
 `view` 返回从 1 开始编号的文件内容（保留制表符，因此显示的文本仍可作为有效的字面量替换输入）或忽略隐藏、依赖与 Python 缓存条目的两层目录列表。`create` 创建新文件，并拒绝覆盖现有文件。选定命令不使用的专用字段可以包含 `null` 占位符；必填字段仍保持必填，`view_range: null` 选择完整视图，`str_replace.new_str: null` 会被拒绝，因此删除内容必须省略该字段。`str_replace` 要求字面量唯一匹配，错误只使用公开的 `old_str` 词汇；`insert` 遵循所选的零基插入边界，不会隐式补尾换行。修改操作会保留请求编辑范围之外的制表符。
 
 ### 失败与恢复

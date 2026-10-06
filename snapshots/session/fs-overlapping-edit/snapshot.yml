@@ -1,0 +1,12 @@
+version: 1
+scenario: fs-overlapping-edit
+profile: headless
+composition: overlapping-editor
+recording: authored
+header:
+  class: overlapping-editor
+  pin: true
+replay:
+  override: true
+workspace:
+  final: true

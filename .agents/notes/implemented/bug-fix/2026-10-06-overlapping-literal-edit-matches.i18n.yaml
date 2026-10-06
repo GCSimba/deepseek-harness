@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-10-06-overlapping-literal-edit-matches.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-10-06-overlapping-literal-edit-matches.md
+/agent-note-overlapping-literal-edit-matches:
+  en: 38ad2b6d90052a56
+  zh: 8c2eb013d16fcb39
+/agent-note-overlapping-literal-edit-matches/problem:
+  en: fbf3f97ad6037cc2
+  zh: 90195662d0c23e48
+/agent-note-overlapping-literal-edit-matches/decision:
+  en: 8c61f79e970a76a0
+  zh: 3e2b1cffff450c3e
+/agent-note-overlapping-literal-edit-matches/alternatives-considered:
+  en: 859c1947fb5a0366
+  zh: 2d1c38277fdd6cfc
+/agent-note-overlapping-literal-edit-matches/consequences:
+  en: e85f0c577e056da0
+  zh: b222f9d368057596

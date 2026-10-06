@@ -1,0 +1,47 @@
+{
+  "patches": [
+    {
+      "at": 2,
+      "entry": {
+        "kind": "chunks",
+        "chunks": [
+          {
+            "type": "block-start",
+            "index": 0,
+            "blockType": "tool-call"
+          },
+          {
+            "type": "tool-call-delta",
+            "index": 0,
+            "id": "overlap-str",
+            "name": "str_replace_editor",
+            "argumentsDelta": "{\"command\":\"str_replace\",\"path\":\"{{fromRequest:<path>([^<]+)</path>}}\",\"old_str\":\"item\\nitem\\n\",\"new_str\":\"changed\\n\"}"
+          },
+          {
+            "type": "block-end",
+            "index": 0,
+            "block": {
+              "type": "tool-call",
+              "id": "overlap-str",
+              "name": "str_replace_editor",
+              "arguments": "{\"command\":\"str_replace\",\"path\":\"{{fromRequest:<path>([^<]+)</path>}}\",\"old_str\":\"item\\nitem\\n\",\"new_str\":\"changed\\n\"}"
+            }
+          },
+          {
+            "type": "usage",
+            "usage": {
+              "inputTokens": 10,
+              "outputTokens": 5
+            }
+          },
+          {
+            "type": "finish",
+            "reason": {
+              "kind": "tool-calls"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

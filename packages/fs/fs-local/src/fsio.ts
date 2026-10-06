@@ -703,14 +703,14 @@ function restoreLineEndings(content: string, lineEndings: LineEndings): string {
   return lineEndings === 'LF' ? content : normalizeLineEndings(content).split('\n').join('\r\n')
 }
 
-function countOccurrences(content: string, needle: string): number {
+function countOccurrences(content: string, needle: string, overlapping: boolean): number {
   let count = 0
   let index = 0
   while (true) {
     const found = content.indexOf(needle, index)
     if (found === -1) return count
     count += 1
-    index = found + needle.length
+    index = found + (overlapping ? 1 : needle.length)
   }
 }
 
@@ -802,7 +802,8 @@ export async function readTextForDiff(
 
 /**
  * Apply a literal replacement to LF-normalized content. Empty or missing search text throws
- * `FS_EDIT_NOT_FOUND`; multiple matches throw `FS_AMBIGUOUS_EDIT` unless `replaceAll` is true.
+ * `FS_EDIT_NOT_FOUND`; multiple possible starts, including overlapping matches, throw
+ * `FS_AMBIGUOUS_EDIT` unless `replaceAll` is true. Replace-all uses non-overlapping matches.
  * @param content - the current file content, already LF-normalized.
  * @param oldString - literal text to find; CRLF inside it is normalized to LF before
  *   matching.
@@ -823,7 +824,7 @@ export function applyLiteralEdit(
     throw new FsError('old_string must be a non-empty string', 'FS_EDIT_NOT_FOUND')
   }
   const newNorm = normalizeLineEndings(newString)
-  const replacements = countOccurrences(content, oldNorm)
+  const replacements = countOccurrences(content, oldNorm, !replaceAll)
   if (replacements === 0) {
     throw new FsError(`old_string was not found in "${displayPath}"`, 'FS_EDIT_NOT_FOUND')
   }

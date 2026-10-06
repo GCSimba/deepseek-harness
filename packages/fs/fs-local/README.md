@@ -88,6 +88,8 @@ Each write probes the target, enforces the optional guard (`createIfAbsent` or `
 
 ### Edit path
 
+A single replacement requires exactly one possible start, including overlapping matches. With `replaceAll: true`, replacements consume non-overlapping matches and the returned count is the number actually replaced.
+
 Each edit probes, verifies the version guard before literal matching (so stale edits report `FS_STALE_VERSION`, never a misleading no-match), reads the file, applies the literal replacement with LF normalization, restores the file's dominant line-ending style, and republishes — all inside the per-target lock.
 
 ### Ownership and invariants

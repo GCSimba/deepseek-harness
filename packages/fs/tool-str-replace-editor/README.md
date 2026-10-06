@@ -46,6 +46,8 @@ A backend, optionally the policy plugin, then the tool; the editor composes with
 
 ### The commands
 
+Uniqueness includes overlapping starts: `item\nitem\n` occurs twice in `item\nitem\nitem\n`, so `str_replace` refuses the edit without changing the file.
+
 `view` returns one-based numbered file content (tabs preserved, so displayed text stays valid literal replacement input) or a two-level directory listing that omits hidden, dependency, and Python-cache entries. `create` makes a new file and refuses to overwrite an existing one. Command-specific fields may contain `null` placeholders when the selected command does not use them; required fields stay required, `view_range: null` selects the full view, and `str_replace.new_str: null` is rejected so deletion requires omission. `str_replace` requires one unique literal match, with errors reported in the public `old_str` vocabulary; `insert` follows the selected zero-based insertion boundary without adding an implicit trailing newline. Mutations preserve tabs outside the requested edit.
 
 ### Failures and recovery
