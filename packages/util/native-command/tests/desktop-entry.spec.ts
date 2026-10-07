@@ -1,9 +1,10 @@
+/** XDG directory defaults and desktop-entry metadata escaping. */
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { expect, it, onTestFinished, vi } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { nativeFileApplications } from '../src/file-applications.ts'
-import { desktopEntryFields } from '../src/desktop-entry.ts'
+import { desktopDataDirectories, desktopEntryFields } from '../src/desktop-entry.ts'
 import type { NativeCommandRunner } from '../src/runner.ts'
 
 async function fixture() {
@@ -70,5 +71,25 @@ Icon=action
     Exec: String.raw`viewer "\\s" %f`,
     TryExec: String.raw`/usr/bin/viewer\scli`,
     Unknown: String.raw`\s`,
+  })
+})
+
+describe('desktopDataDirectories', () => {
+  const home = join('/fixture', 'home')
+  const defaultHome = join(home, '.local', 'share')
+
+  describe.each([
+    ['unset', undefined, defaultHome],
+    ['empty', '', defaultHome],
+    ['configured', '/custom/data', '/custom/data'],
+  ] as const)('%s data home', (_label, dataHome, expectedHome) => {
+    it.each([
+      ['unset', undefined, ['/usr/local/share', '/usr/share']],
+      ['empty', '', ['/usr/local/share', '/usr/share']],
+      ['configured', '/first::/second', ['/first', '/second']],
+    ] as const)('resolves %s system directories after the data home', (_label, dataDirs, expectedDirs) => {
+      expect(desktopDataDirectories(home, { XDG_DATA_HOME: dataHome, XDG_DATA_DIRS: dataDirs }))
+        .toEqual([expectedHome, ...expectedDirs])
+    })
   })
 })
