@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
-import Storage, { storageBackendServiceKey } from '@deepseek-ai/dsh-storage'
+import Storage, { StorageError, storageBackendServiceKey } from '@deepseek-ai/dsh-storage'
 import { apply, defineDomain, descriptorOf, DomainFacility, domainTable } from '../src/index.ts'
 import type { Config } from '../src/index.ts'
 import type { DomainChanged } from '../src/events.ts'
@@ -294,6 +294,21 @@ describe('KvTable writes', () => {
 })
 
 describe('durability failure', () => {
+  it('does not retire a healthy backend when an update transform throws closed', async () => {
+    const { facility, changes } = await harness()
+    const domain = await facility.open(spec)
+    const table = domain.table('items')
+    await table.put('a', { label: 'x', count: 1 })
+    const failure = new StorageError('closed', 'caller transform failure')
+    await expect(table.update('a', () => { throw failure })).rejects.toBe(failure)
+    expect(table.get('a')).toEqual({ label: 'x', count: 1 })
+    expect(changes).toHaveLength(1)
+    await expect(facility.open(spec)).rejects.toMatchObject({ code: 'already-open' })
+    await table.update('a', value => ({ ...value, count: 2 }))
+    expect(table.get('a')).toEqual({ label: 'x', count: 2 })
+    await domain.close()
+  })
+
   it('leaves memory untouched and emits nothing when the backend rejects a write', async () => {
     const pool = new MemoryMediaPool()
     const { facility, changes } = await harness({ pool })

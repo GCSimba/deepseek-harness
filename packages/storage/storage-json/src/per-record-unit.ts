@@ -6,8 +6,10 @@
  * every write is one durable file operation. The domain layer owns the live
  * in-memory tables (seeded by the open-time `loadAll`) and serializes writes
  * through its write chain, so this unit never mutates memory and needs no
- * rollback — a failed write simply leaves both the file and the domain's
- * memory unchanged.
+ * rollback. A failure before replacement leaves the file unchanged; a
+ * directory-sync failure after replacement retires the unit with `closed`,
+ * requiring a fresh open from the medium. Legacy bootstrap uses the same
+ * publication and retirement rules.
  *
  * Per-record contract: a record document that is malformed or stamped with a
  * version outside the accepted set (the descriptor's current version plus
@@ -29,9 +31,9 @@
 import { mkdir, readFile, readdir, rename, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { Dirent } from 'node:fs'
-import { StorageError } from '@deepseek-ai/dsh-storage'
 import type { KvUnit, KvUnitDescriptor } from '@deepseek-ai/dsh-storage'
 import { writeAtomic } from './atomic.ts'
+import { JsonUnitLifetime } from './unit-lifetime.ts'
 import { parseRecord, serializeRecord } from './format.ts'
 import type { UnitState } from './format.ts'
 
@@ -193,20 +195,19 @@ async function readRecord(path: string, versions: readonly number[]): Promise<un
  * domain layer's write chain), exactly like the `single`-layout unit.
  */
 export class PerRecordJsonUnit implements KvUnit {
-  private closed = false
-  /** In-flight durable writes; close() drains them before releasing the unit. */
-  private readonly inFlight = new Set<Promise<void>>()
+  private readonly lifetime: JsonUnitLifetime
 
   constructor(
     private readonly descriptor: KvUnitDescriptor,
     private readonly dir: string,
-    private readonly onClose: () => void,
-  ) {}
+    onClose: () => void,
+  ) {
+    this.lifetime = new JsonUnitLifetime(descriptor.name, onClose)
+  }
 
   /** Re-read the tree: the directory is the authoritative state. */
   async loadAll(): Promise<{ tables: Record<string, Record<string, unknown>>; global: unknown }> {
-    this.assertOpen()
-    const state = await loadPerRecordState(this.descriptor, this.dir)
+    const state = await this.lifetime.run(() => loadPerRecordState(this.descriptor, this.dir))
     const tables: Record<string, Record<string, unknown>> = {}
     for (const [table, records] of state.tables) {
       tables[table] = Object.fromEntries(records)
@@ -216,16 +217,18 @@ export class PerRecordJsonUnit implements KvUnit {
 
   /** Durably replace one record: its own document, atomically. */
   async putRecord(table: string, key: string, value: unknown): Promise<void> {
-    this.assertOpen()
+    this.lifetime.assertOpen()
     assertSafeKey(this.descriptor.name, key)
-    await this.tracked(this.writeDocument(join(this.tableDir(table), `${key}.json`), value))
+    const path = join(this.tableDir(table), `${key}.json`)
+    await this.lifetime.run(() => this.writeDocument(path, value))
   }
 
   /** Durably delete one record. Idempotent: a missing key is a no-op. */
   async deleteRecord(table: string, key: string): Promise<void> {
-    this.assertOpen()
+    this.lifetime.assertOpen()
     assertSafeKey(this.descriptor.name, key)
-    await this.tracked(rm(join(this.tableDir(table), `${key}.json`), { force: true }))
+    const path = join(this.tableDir(table), `${key}.json`)
+    await this.lifetime.run(() => rm(path, { force: true }))
   }
 
   /**
@@ -236,41 +239,27 @@ export class PerRecordJsonUnit implements KvUnit {
    * keeping).
    */
   async backupRecord(table: string, key: string): Promise<string> {
-    this.assertOpen()
+    this.lifetime.assertOpen()
     assertSafeKey(this.descriptor.name, key)
     const path = join(this.tableDir(table), `${key}.json`)
     const moved = `${path}.bak.${backupStamp(new Date())}`
-    await this.tracked(rename(path, moved))
+    await this.lifetime.run(() => rename(path, moved))
     return moved
   }
 
   /** Durably replace the global singleton. Only valid when declared. */
   async setGlobal(value: unknown): Promise<void> {
-    this.assertOpen()
+    this.lifetime.assertOpen()
     if (!this.descriptor.hasGlobal) {
       throw new Error(`unit '${this.descriptor.name}' does not declare a global slot`)
     }
-    await this.tracked(this.writeDocument(join(this.dir, 'global.json'), value))
+    await this.lifetime.run(() => this.writeDocument(join(this.dir, 'global.json'), value))
   }
 
-  /* jscpd:ignore-start -- the two unit classes are standalone; the drain/guard lifecycle mirrors the shared KvUnit contract */
-  /** Drain in-flight writes and release the unit. Idempotent. */
-  async close(): Promise<void> {
-    if (this.closed) {
-      await Promise.allSettled(this.inFlight)
-      return
-    }
-    this.closed = true
-    await Promise.allSettled(this.inFlight)
-    this.onClose()
+  /** Drain admitted reads and writes and release the unit. Idempotent. */
+  close(): Promise<void> {
+    return this.lifetime.close()
   }
-
-  private assertOpen(): void {
-    if (this.closed) {
-      throw new StorageError('closed', `unit '${this.descriptor.name}' is closed`)
-    }
-  }
-  /* jscpd:ignore-end */
 
   /** Resolve a declared table's directory; an undeclared table is a caller bug and throws. */
   private tableDir(table: string): string {
@@ -286,15 +275,6 @@ export class PerRecordJsonUnit implements KvUnit {
       await mkdir(dirname(path), { recursive: true, mode: 0o700 })
       await writeAtomic(path, serializeRecord(this.descriptor.version, value))
     })()
-  }
-
-  /** Track one durable write so close() drains it. */
-  private tracked(write: Promise<void>): Promise<void> {
-    this.inFlight.add(write)
-    // Swallow only on the tracking branch: the caller still awaits `write`
-    // itself, so rejections stay observed exactly once.
-    write.catch(() => {}).finally(() => this.inFlight.delete(write))
-    return write
   }
 }
 

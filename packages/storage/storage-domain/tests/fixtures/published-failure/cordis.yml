@@ -1,0 +1,7 @@
+- name: '../../../../storage/src/index.ts'
+- name: '../../../../storage-json/src/index.ts'
+  config:
+    root: !!js process.env.DSH_PUBLICATION_TEST_ROOT
+- name: '../../../src/index.ts'
+  config:
+    backend: json

@@ -1,0 +1,22 @@
+# Bilingual-pair consistency record for 2026-08-21-storage-json-post-publish-durability-failure.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-21-storage-json-post-publish-durability-failure.md
+/agent-note-terminal-recovery-after-an-indeterminate-json-publication:
+  en: d7924d424201a84d
+  zh: e95af759e8c10bbf
+/agent-note-terminal-recovery-after-an-indeterminate-json-publication/problem:
+  en: 09ce4aab7bd58128
+  zh: 7f3edffc67583354
+/agent-note-terminal-recovery-after-an-indeterminate-json-publication/decision:
+  en: 333f776038aee0b3
+  zh: 27525047042058a6
+/agent-note-terminal-recovery-after-an-indeterminate-json-publication/verification:
+  en: b96fb1953ba10fdf
+  zh: ef9945872d09edf6
+/agent-note-terminal-recovery-after-an-indeterminate-json-publication/alternatives-considered:
+  en: 3bd89cff523c3aab
+  zh: 4eba5747da3e2271
+/agent-note-terminal-recovery-after-an-indeterminate-json-publication/consequences:
+  en: ecd7db7da1546499
+  zh: 14a11433584e1132

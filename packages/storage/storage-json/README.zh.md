@@ -55,6 +55,8 @@ kind: "package-reference"
 
 缺失的 `single` 文件或 `per-record` 目录会作为空单元打开，并在第一次写入时物化。在 `single` 中，畸形内容以 `malformed-medium` 拒绝，不同的已存版本以 `version-mismatch` 拒绝。在 `per-record` 中，每份畸形或不可读的文档，以及版本不在描述符的当前版本和兼容版本内的文档，都读作记录不存在，因此单个坏文档不会使单元被拒绝。记录键必须匹配 `[a-zA-Z0-9_-]+`；不安全的键在任何文件操作前被拒绝。每次已完成的写入都已持久化，关闭后的操作以 `closed` 拒绝。
 
+`rename()` 前的失败保持原目标不变，单元仍可使用。POSIX 上替换后的父目录同步失败会让完整的新目标保持可见，但无法确认其崩溃持久性：单元排空已接纳的 I/O，释放名称，并以 `StorageError('closed')` 拒绝，错误原因保留原始失败。后续读写均被拒绝。重新打开单元以重读介质；此规则也适用于 `per-record` 在 `loadAll()` 期间发布旧格式初始化文档的情况。
+
 只有当源单元名称匹配，且源版本为当前版本或已声明的兼容版本时，空的 `per-record` 目录树才可以从有效的 `<root>/<unit>.json` 整单元文档初始化其已声明表。后端保持该源文件不变，并为迁移的记录写入当前版本戳。接受集合之外的源版本会使新目录树保持为空。已声明表中只要存在任意文档路径，或存在已声明的 `global.json`，就会对整个单元禁止该初始化，即使该文档不可读或版本陈旧。
 
 -----
@@ -69,7 +71,7 @@ kind: "package-reference"
 
 ### 设计理念
 
-- **`single` 以内存为权威状态。** 每次写入都会更改内存单元、序列化其完整状态，并以原子方式替换 `<unit>.json`。发布失败会恢复先前的内存值。
+- **`single` 以内存为权威状态。** 每次写入都会更改内存单元、序列化其完整状态，并以原子方式替换 `<unit>.json`。替换前的失败恢复先前的内存值；替换后的失败则终止句柄，不再暴露陈旧内存。
 - **`per-record` 以目录为权威状态。** 每次 put 或 delete 都会更改一个 `<unit>/<table>/<key>.json` 文档，`loadAll()` 则重新读取目录树。每份文档都带有单元版本戳与一条记录值。
 - **每次调用都持久发布。** 写入过程使用临时文件、fsync、原子 `rename()` 替换，并在 POSIX 上 fsync 父目录。领域层写入链负责安排跨调用的顺序。
 
@@ -96,6 +98,7 @@ kind: "package-reference"
 | [`src/per-record-unit.ts`](src/per-record-unit.ts) | 一个 `per-record` 单元：目录树读取、路径安全记录与单文档写入 |
 | [`src/format.ts`](src/format.ts) | 带版本校验的整单元与记录序列化 |
 | [`src/atomic.ts`](src/atomic.ts) | 原子文件替换：临时文件写入、fsync、rename、目录 fsync |
+| [`src/unit-lifetime.ts`](src/unit-lifetime.ts) | 两种布局共用的终止失败处理与排空后名称释放 |
 
 </details>
 

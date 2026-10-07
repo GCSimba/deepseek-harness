@@ -97,7 +97,7 @@ interface DomainSpec {
 ## The open domain
 
 ```ts type-equiv
-/** One open domain, typed by its spec. */
+/** One open domain, typed by its spec; a backend `closed` write rejection retires the handle. */
 interface Domain<S extends DomainSpec> {
   /** Domain name from the spec. */
   readonly name: string
@@ -117,13 +117,19 @@ interface Domain<S extends DomainSpec> {
    * the domain name for a later open. Idempotent — repeated calls share one
    * teardown. The consumer owns this call (typically as its own `ctx.effect`
    * disposer); the facility closes any domain left open when it unmounts.
+   * A backend `closed` write rejection shares this teardown, but invalidates
+   * reads immediately and rejects queued jobs without running their transforms.
+   * Reopen after successful teardown to reload the medium. If unit release
+   * fails, close() exposes that failure and the name remains reserved.
    * @returns resolution after the unit is released.
    */
   close(): Promise<void>
 }
 ```
 
-Reads are synchronous from authoritative in-memory state: `KvTable` exposes `get`/`entries`/`keys`/`size` (snapshot iterators that stay stable while queued writes land), and the global handle's `get()` serves the spec's `initial` until the first `set` materializes the slot on the medium. Every write — `put`, `delete`, `update`, `global.set` — queues on one per-domain chain and reaches backend durability first, then mutates memory, then emits `domain/changed`; a rejected backend write leaves memory untouched, so reads never diverge from the medium. `update(key, fn)` is an atomic read-modify-write at its chain slot (a missing key rejects `missing-key`); `delete` of an absent key resolves `false` with no write and no event. Returned records are the stored objects themselves, not copies — replace via `put`/`update`, never mutate in place.
+Reads are synchronous from authoritative in-memory state: `KvTable` exposes `get`/`entries`/`keys`/`size` (snapshot iterators that stay stable while queued writes land), and the global handle's `get()` serves the spec's `initial` until the first `set` materializes the slot on the medium. Every write — `put`, `delete`, `update`, `global.set` — queues on one per-domain chain and reaches backend durability first, then mutates memory, then emits `domain/changed`; a rejected backend write leaves memory untouched. `update(key, fn)` is an atomic read-modify-write at its chain slot (a missing key rejects `missing-key`); `delete` of an absent key resolves `false` with no write and no event. Returned records are the stored objects themselves, not copies — replace via `put`/`update`, never mutate in place.
+
+A backend write rejecting with `StorageError('closed')` invalidates cached reads and retires the domain. Queued jobs reject without running transforms or emitting changes; new writes reject immediately. The failing and queued operations await teardown; after successful unit release, the facility frees the name so a new `open(spec)` can reload the medium. Explicit `close()` shares that teardown and exposes any release failure, which keeps the name reserved without replacing the operation's original error. Other backend failures and caller-transform errors leave the domain usable, even when a transform throws `StorageError('closed')`. This distinction matters when JSON replacement is visible but its subsequent directory synchronization fails: serving the old cache or publishing it again would conflict with the medium.
 
 ## The domain facility: `ctx.storageDomain`
 

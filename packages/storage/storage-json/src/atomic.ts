@@ -15,14 +15,29 @@ import { open, rename, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
+/** Internal failure after replacement: the target is visible but directory durability is uncertain. */
+export class PublishedWriteDurabilityError extends Error {
+  override readonly name = 'PublishedWriteDurabilityError'
+
+  /**
+   * @param path - Published target file.
+   * @param cause - Parent-directory synchronization failure.
+   */
+  constructor(path: string, cause: unknown) {
+    super(`file '${path}' is published, but parent-directory durability could not be confirmed`, { cause })
+  }
+}
+
 /**
  * Durably replace `path` with `data`.
  * @param path - Absolute target file path.
  * @param data - Full new file content.
  * @returns resolution after the replacement is crash-durable.
+ * @throws {@link PublishedWriteDurabilityError} when directory synchronization fails after replacement.
  */
 export async function writeAtomic(path: string, data: string): Promise<void> {
   const tmp = join(dirname(path), `.${randomUUID()}.tmp`)
+  let published = false
   try {
     const handle = await open(tmp, 'wx', 0o600)
     try {
@@ -32,9 +47,15 @@ export async function writeAtomic(path: string, data: string): Promise<void> {
       await handle.close()
     }
     await rename(tmp, path)
+    published = true
     await fsyncDirectory(dirname(path))
   } catch (error) {
-    await rm(tmp, { force: true })
+    if (published) throw new PublishedWriteDurabilityError(path, error)
+    try {
+      await rm(tmp, { force: true })
+    } catch (_cleanupFailure) {
+      // Temporary-file cleanup must not replace the publication failure.
+    }
     throw error
   }
 }
@@ -46,8 +67,14 @@ async function fsyncDirectory(path: string): Promise<void> {
   const handle = await open(path, 'r')
   try {
     await handle.sync()
-  } finally {
-    await handle.close()
+  } catch (error) {
+    try {
+      await handle.close()
+    } catch (_closeFailure) {
+      // Preserve the synchronization failure when directory cleanup also fails.
+    }
+    throw error
   }
+  await handle.close()
 }
 /* v8 ignore stop */

@@ -55,6 +55,8 @@ The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-a
 
 A missing `single` file or `per-record` directory opens as an empty unit and materializes on the first write. In `single`, malformed content rejects with `malformed-medium`, and a different stored version rejects with `version-mismatch`. In `per-record`, each malformed or unreadable document, and each document whose version is outside the descriptor's current and compatible versions, reads as an absent record, so one bad document does not reject the unit. Record keys must match `[a-zA-Z0-9_-]+`; an unsafe key rejects before any file operation. Every resolved write is durable, and operations after close reject with `closed`.
 
+A failure before `rename()` leaves the previous target intact and the unit usable. A POSIX parent-directory synchronization failure after replacement leaves the complete new target visible but its crash durability unconfirmed: the unit drains admitted I/O, releases its name, and rejects with `StorageError('closed')` retaining the original failure as its cause. Subsequent reads and writes reject. Reopen the unit to reload the medium; this also applies when `per-record` legacy initialization publishes a document during `loadAll()`.
+
 An empty `per-record` tree can initialize its declared tables from a valid `<root>/<unit>.json` whole-unit document only when the source unit name matches and its version is current or declared compatible. The backend leaves that source file unchanged and stamps migrated records with the current version. A source version outside the accepted set leaves the new tree empty. Any document path in a declared table, or a declared `global.json`, suppresses this initialization for the complete unit, even if that document is unreadable or stale.
 
 -----
@@ -69,7 +71,7 @@ The two layouts share atomic publication but assign state ownership differently.
 
 ### Design concept
 
-- **`single` keeps memory authoritative.** Each write changes the in-memory unit, serializes its complete state, and atomically replaces `<unit>.json`. A failed publish restores the prior in-memory value.
+- **`single` keeps memory authoritative.** Each write changes the in-memory unit, serializes its complete state, and atomically replaces `<unit>.json`. A failure before replacement restores the prior in-memory value; a failure after replacement retires the handle rather than exposing stale memory.
 - **`per-record` keeps the directory authoritative.** Each put or delete changes one `<unit>/<table>/<key>.json` document, and `loadAll()` rereads the tree. Each document stamps the unit version and carries one record value.
 - **Publication is durable per call.** A write uses a temporary file, fsync, atomic `rename()` replacement, and a parent-directory fsync on POSIX. The domain layer's write chain supplies ordering across calls.
 
@@ -96,6 +98,7 @@ A `per-record` table document at `<root>/<unit>/<table>/<key>.json` has the form
 | [`src/per-record-unit.ts`](src/per-record-unit.ts) | One `per-record` unit: tree reads, path-safe records, and one-document writes |
 | [`src/format.ts`](src/format.ts) | Whole-unit and record serialization with version validation |
 | [`src/atomic.ts`](src/atomic.ts) | Atomic file replacement: temp write, fsync, rename, directory fsync |
+| [`src/unit-lifetime.ts`](src/unit-lifetime.ts) | Shared terminal failure handling and quiescent name release for both layouts |
 
 </details>
 

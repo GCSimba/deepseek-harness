@@ -72,6 +72,8 @@ The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-a
 
 Every write resolves only after the backend acknowledges durability, and each emits one `domain/changed` event in write order. Failures carry stable `DomainError` codes: `already-open` (the name is open or still closing), `facet-unsupported` (the routed backend serves no `kv` facet), `invalid-record` (a stored record or global fails its schema, naming the table and key), `missing-key` (an `update` on an absent record), and `closed` (any use after close). Backend failures such as `version-mismatch` pass through unchanged.
 
+A backend write rejecting with `StorageError('closed')` retires the domain: cached reads and new writes reject immediately, queued jobs reject without running transforms, and no change event describes the failed write. The failing and queued operations await teardown. After successful unit release, reopen through `ctx.storageDomain.open(spec)` to reconstruct state from the medium. Explicit `domain.close()` shares teardown and exposes release failure; such a failure keeps the name reserved without replacing the operation's original error. Other write errors remain retryable; an `update` transform throwing `closed` does not retire a healthy backend.
+
 -----
 
 <a id="understand-the-implementation"></a>
@@ -85,7 +87,7 @@ The domain layer is a single implementation, not an abstracted seam: consumers d
 ### Design concept
 
 - **The spec object is the single source of truth.** `defineDomain` pins the spec's literal types and validates its fields at the owning package's module load, before any medium is touched. Record schemas are zod, so `z.infer` avoids duplicating consumer types; plugin `Config` stays schemastery.
-- **Memory is authoritative; the medium is the durable projection.** Reads are synchronous from validated in-memory state. Every write queues on one per-domain write chain: backend durability first, then memory mutation, then `domain/changed` — a rejected backend write leaves memory untouched, so reads never diverge from the medium.
+- **Memory is authoritative while the domain is usable.** Reads are synchronous from validated in-memory state. Every write queues on one per-domain write chain: backend durability first, then memory mutation, then `domain/changed`. A rejected write leaves memory untouched; a backend `closed` rejection invalidates that cache until a fresh domain reloads the medium.
 - **One write chain per domain.** `put`, `delete`, `update`, and `global.set` all queue on it; `update`'s transform runs at its chain slot, so concurrent updates never interleave. Records are plain immutable data — returned values are the stored objects themselves and must not be mutated in place.
 - **Writes emit after the commit point.** `domain/changed` is a notification, not a transaction participant: a throwing listener is contained with a logged warning rather than rejecting the already-durable write.
 

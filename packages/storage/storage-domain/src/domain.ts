@@ -2,14 +2,15 @@
  * Runtime of one open domain: authoritative in-memory state, the single
  * per-domain write chain, and change-event emission. Reads are synchronous
  * from memory; every write queues on the chain, awaits backend durability
- * FIRST, then mutates memory, then emits `domain/changed` — a rejected
- * backend write leaves memory untouched (no divergence between reads and the
- * medium), and events carry values that equal the in-memory state at
- * emission, in write order.
+ * before mutating memory and emitting `domain/changed`. A backend `closed`
+ * rejection invalidates cached reads and retires the domain; other write
+ * failures leave memory unchanged and allow retries. Events carry values
+ * equal to the in-memory state at emission, in write order.
  * @module @deepseek-ai/dsh-storage-domain/src/domain
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { StorageError } from '@deepseek-ai/dsh-storage'
 import type { KvUnit } from '@deepseek-ai/dsh-storage'
 import { DomainError } from './error.ts'
 import type { DomainSpec, DomainGlobalSpec, TableKeyOf, TableValueOf } from './spec.ts'
@@ -93,7 +94,7 @@ export interface KvTable<K extends string, V> {
 export type DomainGlobalHandleOf<S extends DomainSpec> =
   S extends { readonly global: DomainGlobalSpec<infer G> } ? DomainGlobal<G> : never
 
-/** One open domain, typed by its spec. */
+/** One open domain, typed by its spec; a backend `closed` write rejection retires the handle. */
 export interface Domain<S extends DomainSpec> {
   /** Domain name from the spec. */
   readonly name: string
@@ -113,18 +114,23 @@ export interface Domain<S extends DomainSpec> {
    * the domain name for a later open. Idempotent — repeated calls share one
    * teardown. The consumer owns this call (typically as its own `ctx.effect`
    * disposer); the facility closes any domain left open when it unmounts.
+   * A backend `closed` write rejection shares this teardown, but invalidates
+   * reads immediately and rejects queued jobs without running their transforms.
+   * Reopen after successful teardown to reload the medium. If unit release
+   * fails, close() exposes that failure and the name remains reserved.
    * @returns resolution after the unit is released.
    */
   close(): Promise<void>
 }
 
-/** Internal boundary handing table handles their domain-owned write machinery. */
+/** Domain-owned write queue, backend calls and notifications for table handles. */
 interface TableHost {
   readonly domainName: string
-  readonly unit: KvUnit
   /** Queue one job on the domain's single write chain. */
   enqueue<T>(job: () => Promise<T>): Promise<T>
-  /** Throw `closed` once the domain has fully closed (reads stay valid while draining). */
+  /** Run a backend write, retiring the domain only on that unit's `closed` rejection. */
+  writeUnit(write: (unit: KvUnit) => Promise<void>): Promise<void>
+  /** Throw `closed` after terminal failure or completed ordinary teardown. */
   assertReadable(): void
   /** Emit `domain/changed` for one durably landed write. */
   emitChanged(change: DomainChanged): void
@@ -149,7 +155,7 @@ export class DomainImpl {
   private chain: Promise<void> = Promise.resolve()
   /** Set when close begins: new writes reject while already-queued writes drain. */
   private disposing = false
-  /** Set when close finishes (chain drained, unit closed): reads reject from here on. */
+  /** Cached reads are unavailable after terminal failure or completed ordinary teardown. */
   private closed = false
   private disposal?: Promise<void>
 
@@ -176,8 +182,8 @@ export class DomainImpl {
     this.name = spec.name
     const host: TableHost = {
       domainName: spec.name,
-      unit,
       enqueue: job => this.enqueue(job),
+      writeUnit: write => this.writeUnit(write),
       assertReadable: () => { this.assertReadable() },
       emitChanged: (change) => { this.emitChanged(change) },
     }
@@ -192,7 +198,7 @@ export class DomainImpl {
           return this.globalValue
         },
         set: value => this.enqueue(async () => {
-          await this.unit.setGlobal(value)
+          await this.writeUnit(unit => unit.setGlobal(value))
           this.globalValue = value
           this.emitChanged({ domain: this.name, table: '', key: '', operation: 'put', value })
         }),
@@ -224,8 +230,8 @@ export class DomainImpl {
 
   /**
    * Close this domain: reject new writes immediately, drain already-queued
-   * writes (their events still emit), close the unit, then free the name via
-   * the facility hook. Idempotent — repeated calls share one teardown.
+   * writes, close the unit, then free the name via the facility hook. Shares
+   * teardown with terminal backend failures, which cancel queued jobs.
    * @returns resolution after the unit is released.
    */
   close(): Promise<void> {
@@ -264,9 +270,33 @@ export class DomainImpl {
     if (this.disposing) {
       return Promise.reject(new DomainError('closed', `domain '${this.name}' is closed`))
     }
-    const result = this.chain.then(job)
-    this.chain = result.then(noop, noop)
-    return result
+    const execution = this.chain.then(() => {
+      if (this.closed) throw new DomainError('closed', `domain '${this.name}' is closed`)
+      return job()
+    })
+    this.chain = execution.then(noop, noop)
+    return execution.catch(async (error: unknown) => {
+      if (this.closed && this.disposal !== undefined) {
+        try {
+          await this.disposal
+        } catch (_teardownFailure) {
+          // Preserve the operation's failure; close() exposes teardown failure separately.
+        }
+      }
+      throw error
+    })
+  }
+
+  private async writeUnit(write: (unit: KvUnit) => Promise<void>): Promise<void> {
+    try {
+      await write(this.unit)
+    } catch (error) {
+      if (error instanceof StorageError && error.code === 'closed') {
+        this.closed = true
+        this.disposal ??= this.runClose()
+      }
+      throw error
+    }
   }
 
   private assertReadable(): void {
@@ -306,7 +336,7 @@ class KvTableImpl<K extends string, V> implements KvTable<K, V> {
 
   put(key: K, value: V): Promise<void> {
     return this.host.enqueue(async () => {
-      await this.host.unit.putRecord(this.tableName, key, value)
+      await this.host.writeUnit(unit => unit.putRecord(this.tableName, key, value))
       this.records.set(key, value)
       this.emitPut(key, value)
     })
@@ -317,7 +347,7 @@ class KvTableImpl<K extends string, V> implements KvTable<K, V> {
       // Existence is decided at this job's chain slot, not at call time: an
       // earlier queued put of the same key makes this delete observe it.
       if (!this.records.has(key)) return false
-      await this.host.unit.deleteRecord(this.tableName, key)
+      await this.host.writeUnit(unit => unit.deleteRecord(this.tableName, key))
       this.records.delete(key)
       this.host.emitChanged({
         domain: this.host.domainName,
@@ -338,7 +368,7 @@ class KvTableImpl<K extends string, V> implements KvTable<K, V> {
         )
       }
       const next = fn(this.records.get(key) as V)
-      await this.host.unit.putRecord(this.tableName, key, next)
+      await this.host.writeUnit(unit => unit.putRecord(this.tableName, key, next))
       this.records.set(key, next)
       this.emitPut(key, next)
       return next

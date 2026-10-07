@@ -72,6 +72,8 @@ domain.table('workspaces').update(id, (r) => ({ ...r, path: newPath }))
 
 每次写入都要等后端确认已持久化后才完成，并按写入顺序各发出一次 `domain/changed` 事件。失败携带稳定的 `DomainError` 代码：`already-open`（名称已打开或仍在关闭）、`facet-unsupported`（已路由后端不提供 `kv` 分面）、`invalid-record`（已存记录或全局不符合其 schema，并指明表与键）、`missing-key`（对不存在的记录执行 `update`）与 `closed`（关闭后的任何使用）。`version-mismatch` 等后端失败会原样透传。
 
+后端写入以 `StorageError('closed')` 拒绝时，领域会终止：缓存读取与新写入立即拒绝，排队任务不运行变换函数而直接拒绝，失败写入不产生变更事件。失败操作与排队操作等待资源销毁结束。单元成功释放后，通过 `ctx.storageDomain.open(spec)` 重新打开，从介质重建状态。显式调用 `domain.close()` 共用资源销毁并暴露释放失败；此时名称仍被占用，但不替换操作的原始错误。其他写入错误仍可重试；`update` 变换函数抛出 `closed` 不会终止健康的后端。
+
 -----
 
 <a id="understand-the-implementation"></a>
@@ -85,7 +87,7 @@ domain.table('workspaces').update(id, (r) => ({ ...r, path: newPath }))
 ### 设计理念
 
 - **spec 对象是唯一真源。** `defineDomain` 固定 spec 的字面类型，并在所属包的模块加载时、任何介质被触碰之前校验其字段。记录 schema 使用 zod，因此 `z.infer` 可避免重复定义消费方类型；插件 `Config` 仍由 schemastery 负责。
-- **内存具有最终决定权；介质是持久投影。** 读取同步取自经过校验的内存状态。每次写入都在每个领域一条的写入链上排队：先到达后端持久状态，再变更内存，然后发出 `domain/changed`——被拒绝的后端写入不会触碰内存，因此读取永远不会与介质分叉。
+- **领域可用时，内存为权威状态。** 读取同步取自经过校验的内存状态。每次写入都在每个领域一条的写入链上排队：先到达后端持久状态，再变更内存，然后发出 `domain/changed`。被拒绝的写入不会触碰内存；后端以 `closed` 拒绝时，缓存失效，必须通过新的领域句柄重读介质。
 - **每个领域一条写入链。** `put`、`delete`、`update` 与 `global.set` 都在其上排队；`update` 的变换在链上自己的槽位运行，因此并发更新绝不会交错。记录是普通不可变数据——返回值就是已存对象本身，绝不能原地修改。
 - **写入在提交点之后发出。** `domain/changed` 是通知，不是事务参与者：监听器抛出异常时，系统会隔离该异常并记录警告，而不会让已经持久的写入被拒绝。
 

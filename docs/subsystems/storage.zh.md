@@ -97,7 +97,7 @@ interface DomainSpec {
 ## 打开的领域
 
 ```ts type-equiv
-/** One open domain, typed by its spec. */
+/** One open domain, typed by its spec; a backend `closed` write rejection retires the handle. */
 interface Domain<S extends DomainSpec> {
   /** Domain name from the spec. */
   readonly name: string
@@ -117,13 +117,19 @@ interface Domain<S extends DomainSpec> {
    * the domain name for a later open. Idempotent — repeated calls share one
    * teardown. The consumer owns this call (typically as its own `ctx.effect`
    * disposer); the facility closes any domain left open when it unmounts.
+   * A backend `closed` write rejection shares this teardown, but invalidates
+   * reads immediately and rejects queued jobs without running their transforms.
+   * Reopen after successful teardown to reload the medium. If unit release
+   * fails, close() exposes that failure and the name remains reserved.
    * @returns resolution after the unit is released.
    */
   close(): Promise<void>
 }
 ```
 
-读取是同步的，来自权威的内存态：`KvTable` 暴露 `get`/`entries`/`keys`/`size`（快照迭代器，在排队写入落地期间保持稳定），global 句柄的 `get()` 在第一次 `set` 将 slot 物化到介质之前一直返回 spec 的 `initial`。每次写入——`put`、`delete`、`update`、`global.set`——都在同一条逐领域写链上排队，先在后端完成持久化，再更新内存，最后发出 `domain/changed`；后端写入被拒时内存原样不动，因此读取绝不会偏离介质。`update(key, fn)` 在其写链 slot 上是一次原子的读-改-写（键缺失时拒绝 `missing-key`）；`delete` 一个不存在的键 resolve 为 `false`，不产生写入也不产生事件。返回的记录就是存储的对象本身，不是副本——请经 `put`/`update` 整体替换，绝不要就地修改。
+读取是同步的，来自权威的内存态：`KvTable` 暴露 `get`/`entries`/`keys`/`size`（快照迭代器，在排队写入落地期间保持稳定），global 句柄的 `get()` 在第一次 `set` 将 slot 物化到介质之前一直返回 spec 的 `initial`。每次写入——`put`、`delete`、`update`、`global.set`——都在同一条逐领域写链上排队，先在后端完成持久化，再更新内存，最后发出 `domain/changed`；后端写入被拒时内存原样不动。`update(key, fn)` 在其写链 slot 上是一次原子的读-改-写（键缺失时拒绝 `missing-key`）；`delete` 一个不存在的键 resolve 为 `false`，不产生写入也不产生事件。返回的记录就是存储的对象本身，不是副本——请经 `put`/`update` 整体替换，绝不要就地修改。
+
+后端写入以 `StorageError('closed')` 拒绝时，缓存读取失效，领域终止。排队任务不运行变换函数、不发出变更事件而直接拒绝；新写入立即拒绝。失败操作与排队操作等待资源销毁结束；单元成功释放后，设施释放名称，新的 `open(spec)` 才能重读介质。显式 `close()` 共用同一资源销毁，并暴露释放失败；此时名称仍被占用，但不替换操作的原始错误。其他后端失败与调用方变换错误不会使领域失效，即使变换函数抛出 `StorageError('closed')`。JSON 替换已经可见而后续目录同步失败时，这一区分至关重要：继续提供旧缓存或再次发布旧缓存都会与介质冲突。
 
 ## 领域 facility：`ctx.storageDomain`
 
