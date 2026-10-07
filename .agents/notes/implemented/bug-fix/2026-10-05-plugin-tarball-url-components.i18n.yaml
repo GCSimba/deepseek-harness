@@ -1,0 +1,22 @@
+# Bilingual-pair consistency record for 2026-10-05-plugin-tarball-url-components.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-10-05-plugin-tarball-url-components.md
+/agent-note-tarball-url-components-in-plugin-installation:
+  en: b636f966f44a824b
+  zh: 2b1c294ac3a42793
+/agent-note-tarball-url-components-in-plugin-installation/problem:
+  en: 617563f0028c4402
+  zh: 15a5803711a89ee5
+/agent-note-tarball-url-components-in-plugin-installation/decision:
+  en: 72b17248ad931acb
+  zh: 50d36cc431c0c79d
+/agent-note-tarball-url-components-in-plugin-installation/verification:
+  en: 6cdbc17725b33d47
+  zh: 150a3bab5a0066d5
+/agent-note-tarball-url-components-in-plugin-installation/alternatives-considered:
+  en: c03687bf5851686d
+  zh: d8cb9ccd9b301c47
+/agent-note-tarball-url-components-in-plugin-installation/consequences:
+  en: 1e61e26c51a30755
+  zh: d5c340d316ace281

@@ -953,6 +953,19 @@ it('stops a run on request, restores the files, and answers not-running or too-l
   expect(await queued).toMatchObject({ application: 'cancelled', changed: false })
 })
 
+it.each([
+  'https://cdn.example.com/plugin.tgz?token=probe',
+  'https://cdn.example.com/packages/plugin.tar.gz?token=probe#archive',
+])('inspects signed tarball URLs without a registry lookup: %s', async (spec) => {
+  const { manager } = await fixture()
+  const view = vi.spyOn(operations, 'viewProfilePackage')
+  onTestFinished(() => { view.mockRestore() })
+  expect(await manager.inspect(spec)).toEqual({
+    status: 'accepted', kind: 'tarball', bundle: null, registry: null, host: 'cdn.example.com',
+  })
+  expect(view).not.toHaveBeenCalled()
+})
+
 it('reads what a spec names before installing it', async () => {
   const { manager, dir, profile } = await fixture(undefined, false, undefined, { inspectTimeoutMs: 1000, pnpmCommand: 'pnpm-test', fallbackRegistries: [] })
   const view = vi.spyOn(operations, 'viewProfilePackage')

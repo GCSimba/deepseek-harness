@@ -61,6 +61,8 @@ function gitHost(spec: string): string {
  * Read a spec into its form. A path must be absolute: the Host's working
  * directory means nothing to the person typing into a browser, and a
  * relative path resolved against the profile would point inside it.
+ * HTTP tarball paths are recognized even with a query or fragment. The spec
+ * reaches pnpm unchanged.
  * @param raw - the spec as typed.
  * @returns the parsed spec.
  * @throws {InvalidInstallSpecError} for an empty spec, a relative path, a name the
@@ -75,10 +77,19 @@ export function parseInstallSpec(raw: string): ParsedInstallSpec {
     return TARBALL_SPEC.test(path) ? { kind: 'tarball', spec, path } : { kind: 'path', spec, path }
   }
   if (/^\.{1,2}(?:[\\/]|$)/.test(spec)) throw invalid(spec, 'a local path must be absolute')
-  const git = GIT_SHORTHAND.test(spec) || GIT_URL.test(spec) || HOSTED_REPOSITORY_URL.test(spec)
-  if (git && !TARBALL_SPEC.test(spec)) return { kind: 'git', spec, host: gitHost(spec) }
+  let url: URL | undefined
   if (/^https?:\/\//i.test(spec)) {
-    if (TARBALL_SPEC.test(spec)) return { kind: 'tarball', spec, host: new URL(spec).host }
+    try {
+      url = new URL(spec)
+    } catch {
+      throw invalid(spec, 'a URL must point at a git repository or a tarball')
+    }
+  }
+  const tarball = TARBALL_SPEC.test(spec) || (url !== undefined && TARBALL_SPEC.test(url.pathname))
+  const git = GIT_SHORTHAND.test(spec) || GIT_URL.test(spec) || HOSTED_REPOSITORY_URL.test(spec)
+  if (git && !tarball) return { kind: 'git', spec, host: gitHost(spec) }
+  if (url !== undefined) {
+    if (tarball) return { kind: 'tarball', spec, host: url.host }
     throw invalid(spec, 'a URL must point at a git repository or a tarball')
   }
   const at = spec.indexOf('@', 1)

@@ -110,6 +110,13 @@ describe('attributeFailure', () => {
     expect(attributeFailure('network', log, git)).toBe('registry')
   })
 
+  it('attributes a signed tarball download failure to its source host', () => {
+    const spec = 'https://cdn.example.com/plugin.tgz?token=probe'
+    const tarball = parseInstallSpec(spec)
+    expect(attributeFailure('network', `ERR_PNPM_FETCH_502 GET ${spec}: Bad Gateway`, tarball)).toBe('spec-host')
+    expect(attributeFailure('network', registryLog, tarball)).toBe('registry')
+  })
+
   it('reads a failure that names no host as the registry\'s', () => {
     expect(attributeFailure('network', 'ECONNRESET', git)).toBe('registry')
     expect(attributeFailure('network', 'socket hang up', name)).toBe('registry')

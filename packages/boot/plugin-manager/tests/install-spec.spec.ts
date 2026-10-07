@@ -29,6 +29,31 @@ describe('parseInstallSpec', () => {
     expect(parseInstallSpec('https://cdn.example.com/x/y/z/dsh-x-1.0.0.tgz')).toEqual({ kind: 'tarball', spec: 'https://cdn.example.com/x/y/z/dsh-x-1.0.0.tgz', host: 'cdn.example.com' })
   })
 
+  it.each([
+    'https://cdn.example.com/plugin.tgz?token=probe',
+    'https://cdn.example.com/packages/plugin.tgz?token=probe',
+    'https://cdn.example.com/x/y/plugin.tar.gz?token=probe&download=1#archive',
+    'https://CDN.Example.com:8443/plugin.TGZ?token=probe',
+    'http://cdn.example.com/plugin.tar.gz#archive',
+  ])('reads HTTP tarballs by pathname and preserves the complete spec: %s', (spec) => {
+    expect(parseInstallSpec(spec)).toEqual({ kind: 'tarball', spec, host: new URL(spec).host })
+  })
+
+  it.each([
+    'https://cdn.example.com/download?file=plugin.tgz',
+    'https://cdn.example.com/plugin.tgz.sig?file=plugin.tgz',
+  ])('retains tarball endpoints identified by the complete spec: %s', (spec) => {
+    expect(parseInstallSpec(spec)).toEqual({ kind: 'tarball', spec, host: new URL(spec).host })
+  })
+
+  it.each([
+    'https://cdn.example.com/download?file=plugin.zip',
+    'https://cdn.example.com/plugin.tgz.sig?token=probe',
+    'https://',
+  ])('refuses an HTTP URL without a recognized tarball spec or repository: %s', (spec) => {
+    expect(() => parseInstallSpec(spec)).toThrow(InvalidInstallSpecError)
+  })
+
   it('refuses what neither the registry nor pnpm would take, naming why', () => {
     const refusal = (spec: string): string => {
       try {
