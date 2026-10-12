@@ -55,6 +55,8 @@ const { text, omittedBytes } = out.finish()
 
 `head`, `tail`, and `headTail` count bytes, not characters or lines: a child's pipe and an HTTP body are byte streams. `finish()` trims a partial codepoint at each cut, so the returned text never carries a replacement character introduced by the cut, and a codepoint is never reconstructed across the omitted middle.
 
+`TextRetainer` preserves complete U+FEFF codepoints, including at the start of a retained window. A caller that treats an initial U+FEFF as a file's byte-order mark must handle that file-format rule before retention; a window start does not identify a file header.
+
 ### Building the omission footer
 
 ```ts

@@ -75,7 +75,7 @@ export interface RetainedItems<T> {
  * `omittedBytes` counts BYTES (not characters or lines) — text retention is
  * byte-oriented for process/body safety. UTF-8 boundaries at each cut are
  * preserved, so `text` never carries a replacement char introduced by the cut
- * itself.
+ * itself. Complete U+FEFF codepoints are retained, including at a window start.
  */
 export interface RetainedText {
   text: string
@@ -198,7 +198,7 @@ export class ItemRetainer<T> {
 }
 
 const encoder = new TextEncoder()
-const decoder = new TextDecoder() // utf-8, non-fatal: internal malformed bytes → U+FFFD
+const decoder = new TextDecoder('utf-8', { ignoreBOM: true }) // non-fatal: internal malformed bytes → U+FFFD
 
 /**
  * Drop a trailing incomplete UTF-8 sequence so a prefix cut never emits a

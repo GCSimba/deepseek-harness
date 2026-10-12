@@ -123,6 +123,13 @@ describe('search tools over the real subprocess service + the packaged rg', () =
       expect(text(result)).toBe('Found 1 match\n\nnotes.md\nLine 1: alpha appears here too')
     })
 
+    it('preserves U+FEFF at the start of a matched interior line', async () => {
+      await writeFile(join(dir, 'feff.txt'), 'ordinary line\n\uFEFFtarget\n')
+      const result = await call('grep', { pattern: 'target', path: 'feff.txt' }, agent())
+      expect(result.isError).toBe(false)
+      expect(text(result)).toBe('Found 1 match\n\nfeff.txt\nLine 2: \uFEFFtarget')
+    })
+
     it('greps a directory target with an include filter', async () => {
       const result = await call('grep', { pattern: 'alpha', path: '.', include: '*.ts' }, agent())
       const output = text(result)

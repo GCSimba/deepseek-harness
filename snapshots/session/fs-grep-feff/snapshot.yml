@@ -1,0 +1,8 @@
+version: 1
+scenario: fs-grep-feff
+profile: headless
+composition: fs-search
+recording: authored
+header:
+  class: fs-search
+platform: posix

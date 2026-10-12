@@ -6,6 +6,7 @@ import {
   type Omitted,
   type RetentionNotice,
   TextRetainer,
+  type TextRetentionStrategy,
   truncateWithoutSplittingSurrogatePair,
 } from '@deepseek-ai/dsh-output-retention'
 
@@ -315,6 +316,55 @@ describe('TextRetainer — UTF-8 boundary handling', () => {
     r.push(new Uint8Array([0xf8, 0x61])) // 0xF8 kept, 'a' dropped by the 1-byte cap
     const result = r.finish()
     expect(result.omittedBytes).toEqual<Omitted>({ kind: 'exact', count: 1 })
+  })
+})
+
+describe('TextRetainer — U+FEFF preservation', () => {
+  const cases: {
+    name: string
+    strategy: TextRetentionStrategy
+    input: string
+    expected: string
+    omitted: number
+  }[] = [
+    { name: 'head within budget', strategy: { kind: 'head', maxBytes: 4 }, input: '\uFEFFZ', expected: '\uFEFFZ', omitted: 0 },
+    { name: 'tail within budget', strategy: { kind: 'tail', maxBytes: 4 }, input: '\uFEFFZ', expected: '\uFEFFZ', omitted: 0 },
+    { name: 'headTail adjacent windows', strategy: { kind: 'headTail', headBytes: 1, tailBytes: 3 }, input: '\uFEFFZ', expected: '\uFEFFZ', omitted: 0 },
+    { name: 'head cut', strategy: { kind: 'head', maxBytes: 4 }, input: '\uFEFFZabc', expected: '\uFEFFZ', omitted: 3 },
+    { name: 'tail cut', strategy: { kind: 'tail', maxBytes: 4 }, input: 'abc\uFEFFZ', expected: '\uFEFFZ', omitted: 3 },
+    { name: 'headTail separated windows', strategy: { kind: 'headTail', headBytes: 4, tailBytes: 4 }, input: '\uFEFFH-middle-\uFEFFT', expected: '\uFEFFH\uFEFFT', omitted: 8 },
+  ]
+
+  it.each(cases)('preserves complete U+FEFF in $name', ({ strategy, input, expected, omitted }) => {
+    const retainer = new TextRetainer(strategy)
+    retainer.push(input)
+    const result = retainer.finish()
+    expect(result.text).toBe(expected)
+    expect(result.truncated).toBe(omitted > 0)
+    expect(result.omittedBytes).toEqual(omitted > 0 ? { kind: 'exact', count: omitted } : { kind: 'none' })
+    expect(utf8(result.text).length + omitted).toBe(utf8(input).length)
+  })
+
+  it('preserves a suffix U+FEFF split across raw byte chunks', () => {
+    const retainer = new TextRetainer({ kind: 'tail', maxBytes: 4 })
+    const bytes = utf8('abc\uFEFFZ')
+    for (const byte of bytes) retainer.push(new Uint8Array([byte]))
+    expect(retainer.finish()).toEqual({ text: '\uFEFFZ', truncated: true, omittedBytes: { kind: 'exact', count: 3 } })
+  })
+
+  it.each<TextRetentionStrategy>([
+    { kind: 'head', maxBytes: 2 },
+    { kind: 'tail', maxBytes: 2 },
+  ])('still discards an incomplete U+FEFF at a $kind cut', (strategy) => {
+    const retainer = new TextRetainer(strategy)
+    retainer.push('\uFEFF')
+    expect(retainer.finish()).toEqual({ text: '', truncated: true, omittedBytes: { kind: 'exact', count: 3 } })
+  })
+
+  it('keeps non-fatal replacement of malformed bytes beside a complete U+FEFF', () => {
+    const retainer = new TextRetainer({ kind: 'head', maxBytes: 4 })
+    retainer.push(new Uint8Array([0xef, 0xbb, 0xbf, 0xff]))
+    expect(retainer.finish()).toEqual({ text: '\uFEFF\uFFFD', truncated: false, omittedBytes: { kind: 'none' } })
   })
 })
 
