@@ -112,6 +112,8 @@ The package is built on one separation and one registration rule:
 
 `web_fetch` removes active and hidden HTML before a shared turndown converter renders GFM tables and strikethrough. A lexical nesting guard and conversion failures produce a fixed omission marker instead of returning unsafe raw HTML, and a synchronous conversion cap bounds DOM work. The complete output — header, untrusted-content notice, rendered body, and truncation footer — is then bounded as a whole. Conversion is memoized per result and cap so registry render and presentation share one parse.
 
+Literal pipes in table cells are individually escaped, including in headings and inline code; HTML entity spelling does not change their count.
+
 ### Presentation
 
 Each tool attaches structured metadata to its result (`output.presentationMeta`) — the faithful search sources, or the fetch summary (final URL, status code, effective truncation) — so the UI can render `web` result cards and replay reproduces them without reparsing the lossy render text. A UI without the `web` capability falls back to the raw tool result, which is the same text.

@@ -48,10 +48,10 @@ turndown.addRule('removeNonVisibleContent', {
   },
 })
 
-/** Render one GFM table cell without interpreting HTML span counts. */
+/** Render a GFM table cell, preserving literal pipes without expanding HTML spans. */
 function renderTableCell(content: string, index: number): string {
   const prefix = index === 0 ? '| ' : ' '
-  const escaped = content.trim().replace(/\n\r/g, '<br>').replace(/\n/g, '<br>').replace(/\|+/g, '\\|').padEnd(3, ' ')
+  const escaped = content.trim().replace(/\n\r/g, '<br>').replace(/\n/g, '<br>').replace(/\|/g, '\\|').padEnd(3, ' ')
   return `${prefix}${escaped} |`
 }
 

@@ -271,6 +271,24 @@ describe('fetch formatting', () => {
       .toBe('**bold _italic_**\n\n> quoted')
   })
 
+  it.each([
+    { cell: 'left|right', expected: 'left\\|right' },
+    { cell: 'left||right', expected: 'left\\|\\|right' },
+    { cell: 'left|||right', expected: 'left\\|\\|\\|right' },
+    { cell: 'left&#124;&#124;right', expected: 'left\\|\\|right' },
+    { cell: 'left&#x7c;&#x7c;right', expected: 'left\\|\\|right' },
+    { cell: '<code>first||last</code>', expected: '`first\\|\\|last`' },
+    { cell: '<strong>left||right</strong>', expected: '**left\\|\\|right**' },
+  ])('preserves each pipe in an HTML table cell: $cell', ({ cell, expected }) => {
+    const table = `<table><thead><tr><th>Expression</th></tr></thead><tbody><tr><td>${cell}</td></tr></tbody></table>`
+    expect(renderHtml(table)).toBe(`| Expression |\n| --- |\n| ${expected} |`)
+  })
+
+  it('preserves each pipe in an HTML table heading', () => {
+    expect(renderHtml('<table><thead><tr><th>A||B</th></tr></thead><tbody><tr><td>x</td></tr></tbody></table>'))
+      .toBe('| A\\|\\|B |\n| --- |\n| x   |')
+  })
+
   it('does not expand numeric colspan attributes into unbounded output', () => {
     const table = '<table><thead><tr><th colspan="1000000">A</th></tr></thead><tbody><tr><td>B</td></tr></tbody></table>'
     expect(renderHtml(table)).toBe('| A   |\n| --- |\n| B   |')

@@ -1,6 +1,5 @@
 /**
- * Deterministic HTTP provider for the web-fetch snapshot scenario: a small
- * HTML page (headings, named entities, a GFM table, nested formatting) on a
+ * Deterministic HTML pages for web-fetch snapshot scenarios on an
  * OS-assigned loopback port behind the real address-pinned transport. Recording
  * and replay therefore exercise fetch and markdown rendering without external
  * network while retaining the recorded request URL.
@@ -10,6 +9,7 @@ import { applyLoopbackServerEffect } from '../loopback-fixture-server.mjs'
 
 /** Model-visible URL retained by the recorded session. */
 const RECORDED_URL = 'http://public.test:43117/menu.html'
+const TABLE_PIPES_URL = 'http://public.test:43117/table-pipes.html'
 
 const PAGE = `<!doctype html>
 <html><head><title>Menu</title><style>.x{color:red}</style><script>ignored()</script></head>
@@ -21,6 +21,11 @@ const PAGE = `<!doctype html>
 <p>See <a href="https://fixture.invalid/specials">today&rsquo;s specials</a>.</p>
 </body></html>
 `
+
+const TABLE_PIPES_PAGE = '<table><thead><tr><th>Expression</th></tr></thead><tbody>'
+  + '<tr><td>left||right</td></tr><tr><td>left|||right</td></tr>'
+  + '<tr><td>left&#124;&#124;right</td></tr><tr><td><code>first||last</code></td></tr>'
+  + '</tbody></table>'
 
 /** Cordis plugin name. */
 export const name = 'web-fetch-fixture-server'
@@ -55,20 +60,22 @@ export async function apply(ctx) {
     id: provider.id,
     available: () => provider.available(),
     fetch: async (request, signal) => {
-      if (request.url !== RECORDED_URL) throw new Error(`unexpected snapshot URL: ${request.url}`)
+      if (request.url !== RECORDED_URL && request.url !== TABLE_PIPES_URL) throw new Error(`unexpected snapshot URL: ${request.url}`)
       await readiness.promise
       if (startupError !== undefined) throw startupError
-      const result = await provider.fetch({ url: transportUrl.toString() }, signal)
-      return { ...result, url: RECORDED_URL }
+      const url = new URL(request.url)
+      url.port = transportUrl.port
+      const result = await provider.fetch({ url: url.toString() }, signal)
+      return { ...result, url: request.url }
     },
   })
   try {
     await applyLoopbackServerEffect(ctx, {
       label: 'web-fetch-fixture-server',
       requestListener: (req, res) => {
-        if (req.url === '/menu.html') {
+        if (req.url === '/menu.html' || req.url === '/table-pipes.html') {
           res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-          res.end(PAGE)
+          res.end(req.url === '/menu.html' ? PAGE : TABLE_PIPES_PAGE)
           return
         }
         res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })

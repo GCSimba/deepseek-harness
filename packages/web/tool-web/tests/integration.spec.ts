@@ -74,6 +74,23 @@ describe('web_fetch integration over the real backend', () => {
     expect(text).toContain('World')
   })
 
+  it('preserves each pipe in fetched HTML tables through the tool registry', async () => {
+    handler = (_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      res.end('<table><thead><tr><th>Expression</th></tr></thead><tbody>'
+        + '<tr><td>left||right</td></tr><tr><td>left|||right</td></tr>'
+        + '<tr><td>left&#124;&#124;right</td></tr><tr><td><code>first||last</code></td></tr>'
+        + '</tbody></table>')
+    }
+    const out = await call('web_fetch', { url: base })
+    expect(out.isError).toBe(false)
+    expect(out.meta).toMatchObject({ statusCode: 200, truncated: false })
+    const text = out.content.map(block => block.type === 'text' ? block.text : '').join('')
+    expect(text).toContain('| left\\|\\|right |')
+    expect(text).toContain('| left\\|\\|\\|right |')
+    expect(text).toContain('| `first\\|\\|last` |')
+  })
+
   it('reports a 404 as a result, not an error', async () => {
     handler = (_req, res) => { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('missing') }
     const out = await call('web_fetch', { url: base })
