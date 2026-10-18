@@ -157,9 +157,11 @@ describe('publishableImage', () => {
     const outside = mkdtempSync(join(tmpdir(), 'dsh-doc-site-outside-'))
     roots.push(outside)
     writeFileSync(join(outside, 'secret.png'), 'not really a png\n')
-    symlinkSync(join(outside, 'secret.png'), join(root, 'packages/linked.png'))
+    // Directory junctions exercise real-path containment without Windows symlink privileges.
+    symlinkSync(outside, join(root, 'packages/linked'), 'junction')
 
-    expect(publishableImage(join(root, 'packages/linked.png'), realpathSync(root))).toBeUndefined()
+    expect(readFileSync(join(root, 'packages/linked/secret.png'), 'utf8')).toBe('not really a png\n')
+    expect(publishableImage(join(root, 'packages/linked/secret.png'), realpathSync(root))).toBeUndefined()
     expect(publishableImage(join(outside, 'secret.png'), realpathSync(root))).toBeUndefined()
   })
 
