@@ -31,12 +31,20 @@ function isMaintained(file: string): boolean {
   return !excludedPrefixes.some(prefix => file.startsWith(prefix))
 }
 
+function commitReferenceText(file: string, line: string): string {
+  if (file !== 'uv.lock' && !file.endsWith('/uv.lock')) return line
+  // uv's artifact sizes are decimal byte counts, even when they match a Git prefix.
+  // Consume quoted strings and comments intact so their references remain checked.
+  return line.replace(/"(?:[^"\\]|\\.)*"|'[^']*'|#.*|\bsize\s*=\s*(\d+)(?=\s*[,}]|\s*$)/g,
+    (match: string, size: string | undefined) => size === undefined ? match : ' '.repeat(match.length))
+}
+
 /**
  * Inspect a maintained source file against known commit identifiers.
  * @param file - Repository-relative path used in diagnostics and exclusions.
  * @param source - File text or a symlink's stored target.
  * @param commits - Lowercase, unambiguous full or abbreviated commit identifiers.
- * @returns One finding per line and reference kind; digests and other Git object types are accepted.
+ * @returns One finding per line and reference kind; digests, uv artifact byte counts, and other Git object types are accepted.
  */
 export function findRepositoryReferences(
   file: string,
@@ -49,7 +57,7 @@ export function findRepositoryReferences(
     if (organizationUrl.test(canonicalReferenceText(line).replace(kitRepositoryUrl, ''))) {
       references.push({ file, line: index + 1, kind: 'organization-url' })
     }
-    if ([...line.matchAll(commitCandidate)].some(match => commits.has(match[0].toLowerCase()))) {
+    if ([...commitReferenceText(file, line).matchAll(commitCandidate)].some(match => commits.has(match[0].toLowerCase()))) {
       references.push({ file, line: index + 1, kind: 'commit-hash' })
     }
   }
