@@ -1,6 +1,6 @@
 /** Bounded output tails and private spill files shared by process providers. */
 import { randomBytes } from 'node:crypto'
-import { closeSync, mkdtempSync, openSync, rmdirSync, unlinkSync, writeSync } from 'node:fs'
+import { closeSync, mkdtempSync, openSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { CollectedOutput } from '@deepseek-ai/dsh-subprocess'
@@ -118,7 +118,8 @@ export function prepareManagedProcessBinding(
  * the cap; without them, only the in-memory tail is ever retained (the
  * diagnostic-tail shape — a language server's stderr).
  *
- * Spilling is best-effort: a spill open or write failure discards the spill,
+ * Partial writes are completed before appending the next chunk. Spilling is
+ * best-effort: a spill open or write failure discards the spill,
  * reports once through {@link SpillOptions.onFailure}, and never interrupts
  * in-memory collection, because `push()` runs inside the stream's `'data'`
  * listener where a thrown error would become an uncaught exception.
@@ -208,9 +209,9 @@ export class OutputCollector {
         const fd = openSync(file, 'wx', 0o600)
         this.spillFile = file
         this.spillFd = fd
-        for (const prior of this.chunks) writeSync(fd, prior)
+        for (const prior of this.chunks) writeFileSync(fd, prior)
       }
-      writeSync(this.spillFd, chunk)
+      writeFileSync(this.spillFd, chunk)
     } catch (error) {
       // ENOENT (spill directory removed by a temp cleaner), EACCES/EPERM,
       // EMFILE, or ENOSPC: the spill file is a recovery aid, not a

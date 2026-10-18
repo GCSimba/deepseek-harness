@@ -1,0 +1,22 @@
+# Bilingual-pair consistency record for 2026-10-17-subprocess-spill-short-writes.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-10-17-subprocess-spill-short-writes.md
+/agent-note-complete-subprocess-spill-writes:
+  en: 3b2429cb26c6dfaa
+  zh: 46371b23a98fbd2a
+/agent-note-complete-subprocess-spill-writes/problem:
+  en: 249868712bab961e
+  zh: dfc85f10159b6a86
+/agent-note-complete-subprocess-spill-writes/decision:
+  en: d84925cf59eb83fe
+  zh: ca7bb6423d5446d7
+/agent-note-complete-subprocess-spill-writes/alternatives-considered:
+  en: e8400ddec5a7d83b
+  zh: 9e7ec24f0544009c
+/agent-note-complete-subprocess-spill-writes/verification:
+  en: 64d7a2f8521aa1c0
+  zh: 5ed41cbc474ba5aa
+/agent-note-complete-subprocess-spill-writes/consequences:
+  en: 8afe7e361d018874
+  zh: 37b974dfba7a1c69

@@ -46,6 +46,8 @@ Windows ordinary subprocesses start the private Job runner with `windowsHide` an
 
 Collect mode keeps the last `maxBytes` of a stream in memory — errors and final results cluster at the end — and, when a `spill` cap is configured, appends the complete stream to a private file under a per-process directory in the OS temp dir (a `0700` directory, `0600` random-named files). A stream larger than the spill cap discards its incomplete spill and returns only the marked truncated tail. Spilling is best-effort: when the spill file cannot be opened or appended (the per-process directory removed by a temporary-file cleaner, `EACCES`, `EMFILE`, `ENOSPC`), the collector discards the spill, logs one `error` through the plugin logger, and keeps collecting the in-memory tail, so the result is truncated with no spill path. Reads are offset-based and non-consuming, so background and batch readers coexist before and after exit.
 
+Partial filesystem writes are completed before the next chunk is appended. If completing a chunk fails, the same failure handling withdraws the incomplete file rather than advertising it as full output.
+
 The `./output` export shares this collector and retained-spill storage with process adapters. `snapshot()` returns the retained raw bytes and total byte count, allowing remote adapters to preserve offsets without forwarding the complete stream.
 
 ### Control transport

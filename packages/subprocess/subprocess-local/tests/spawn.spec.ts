@@ -97,12 +97,12 @@ vi.mock('node:fs', async (importOriginal) => {
       }
       return actual.openSync(...args)
     },
-    writeSync(...args: Parameters<typeof actual.writeSync>): number {
+    writeFileSync(...args: Parameters<typeof actual.writeFileSync>): void {
       if (failNextWrite.value) {
         failNextWrite.value = false
         throw Object.assign(new Error('simulated ENOSPC on write'), { code: 'ENOSPC' })
       }
-      return actual.writeSync(...args)
+      actual.writeFileSync(...args)
     },
   }
 })
