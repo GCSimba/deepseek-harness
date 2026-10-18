@@ -114,6 +114,8 @@ All numbers are wall times from one shared Linux container with a 64-CPU quota o
 
 ### 7. CLI help reads run concurrently; doc-graph probes are memoized
 
+CLI help honors an explicit positive `DSH_GATE_CONCURRENCY` for both prefetched and nested reads. An unset or empty override retains the default worker budget. Resource-constrained hosts can limit simultaneous profile boots without extending child deadlines or changing help content; malformed overrides fail before any child starts.
+
 - **CLI help:** `prefetchHelp()` in [`scripts/gen-cli-help.ts`](../../../../scripts/gen-cli-help.ts) starts the 12 top-level `dsh … --help` reads (the launcher, `plugin`, and each profile's shorthand and `--profile` forms) within the default worker budget, each with its own temporary `DSH_HOME` and `DSH_AGENTS_HOME`, and the in-order traversal consumes them; nested reads share the same limit. A failed read reaches the traversal when it requests that invocation, and `close()` aborts queued and running reads and waits for every started child. The gate takes 49.9/53.9 → 6.9/7.2 s.
 - **Doc graphs:** `withMemoizedFileSystemProbes()` in [`scripts/gen-doc-graphs.ts`](../../../../scripts/gen-doc-graphs.ts) memoizes `ts.sys` `fileExists`, `directoryExists`, `realpath`, `readDirectory`, and `getDirectories` while `renderDocs` runs, so every compiler host and config parse in one run shares one view of the file system. The workspace must not change during the run, and the original methods are restored before pages are written. The gate takes 48.7/44.7 → 32.7/34.2 s.
 - **Why it is lossless:** Both generators produce byte-identical pages.

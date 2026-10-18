@@ -176,7 +176,23 @@ export async function collectCliHelp(
   return [...pages.values()]
 }
 
+/**
+ * Select the help subprocess budget, honoring the aggregate's explicit worker limit.
+ * @param env - Environment containing the optional `DSH_GATE_CONCURRENCY` override.
+ * @returns A positive worker count; malformed overrides throw before subprocesses start.
+ */
+export function cliHelpConcurrency(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.DSH_GATE_CONCURRENCY
+  if (raw === undefined || raw === '') return defaultParallelism(env)
+  const workers = Number(raw)
+  if (!Number.isSafeInteger(workers) || workers < 1) {
+    throw new Error(`gen-cli-help: DSH_GATE_CONCURRENCY must be a positive integer, got ${JSON.stringify(raw)}`)
+  }
+  return workers
+}
+
 async function collectHelp(): Promise<HelpPage[]> {
+  const concurrency = cliHelpConcurrency()
   const directory = mkdtempSync(join(tmpdir(), 'dsh-cli-help-'))
   const profiles = Object.keys(PROFILE_TEMPLATES)
   // Concurrent profile boots share the repository worker budget.
@@ -207,7 +223,7 @@ async function collectHelp(): Promise<HelpPage[]> {
     } finally {
       signal.removeEventListener('abort', abort)
     }
-  }, topLevelHelpArgs(profiles), defaultParallelism())
+  }, topLevelHelpArgs(profiles), concurrency)
   try {
     return await collectCliHelp(reader.readHelp, profiles)
   } finally {

@@ -1,7 +1,8 @@
 /** Command discovery and complete output preservation for the CLI reference. */
 
 import { describe, expect, it } from 'vitest'
-import { collectCliHelp, parseCliHelp, prefetchHelp, topLevelHelpArgs } from './gen-cli-help.ts'
+import { cliHelpConcurrency, collectCliHelp, parseCliHelp, prefetchHelp, topLevelHelpArgs } from './gen-cli-help.ts'
+import { defaultParallelism } from './parallelism.ts'
 
 interface PendingRead {
   args: string
@@ -84,6 +85,17 @@ describe('CLI help discovery', () => {
 })
 
 describe('CLI help prefetch', () => {
+  it('honors the explicit gate budget and otherwise retains the default', () => {
+    expect(cliHelpConcurrency({ DSH_GATE_CONCURRENCY: '1' })).toBe(1)
+    expect(cliHelpConcurrency({ DSH_GATE_CONCURRENCY: '3' })).toBe(3)
+    expect(cliHelpConcurrency({})).toBe(defaultParallelism({}))
+    expect(cliHelpConcurrency({ DSH_GATE_CONCURRENCY: '' })).toBe(defaultParallelism({}))
+  })
+
+  it.each(['0', '-1', '1.5', '2workers', 'NaN', 'Infinity'])('rejects worker override %j', (raw) => {
+    expect(() => cliHelpConcurrency({ DSH_GATE_CONCURRENCY: raw })).toThrow('must be a positive integer')
+  })
+
   it('starts prefetched reads within the limit and serves them in request order', async () => {
     const { reads, read } = controlledReads()
     const reader = prefetchHelp(read, [['a'], ['b'], ['c']], 2)
