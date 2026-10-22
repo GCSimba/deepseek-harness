@@ -12,6 +12,15 @@ const organizationUrl = new RegExp(`\\bgithub\\.com/${organization}(?![a-z0-9-])
 // The independent kit repository owns the engine source and documentation.
 const kitRepositoryUrl = new RegExp(`\\bgithub\\.com/${organization}/libreoffice-kit(?:\\.git)?(?=/|[^a-zA-Z0-9_.-]|$)`, 'g')
 const commitCandidate = /(?<![a-z0-9])[\da-f]{7,40}(?![a-z0-9])/gi
+const decimalCommitLabel = /(?:\b(?:commit(?:[-_ ]?(?:hash|id|sha))?|revision|ref|sha(?:-?1)?)|提交(?:哈希)?)[\s"'`:=：]*$/i
+const decimalCommitPath = /\/(?:commit|commits|blob|tree)\/$/i
+const decimalCommitCommand = /\bgit\s+(?:show|log|diff|reset|revert|cherry-pick|checkout|switch|merge|rebase|branch)\b/i
+const decimalCommandData = new RegExp(
+  '(?:--[a-z0-9-]+=|(?:--(?:max-count|skip|abbrev|unified|inter-hunk-context|'
+    + 'stat-(?:width|name-width|graph-width|count)|since|until|after|before)|-[nU])\\s+)["\'`]?$',
+  'i',
+)
+const decimalReferenceOption = /--(?:onto|contains|merged)=["'`]?$/i
 const excludedPrefixes = ['vendor/', '.agents/notes/archived/']
 const gitOutputLimit = 64 * 1024 * 1024
 // One 41-byte line per object; 1.2 million objects produce about 49 MiB.
@@ -31,12 +40,38 @@ function isMaintained(file: string): boolean {
   return !excludedPrefixes.some(prefix => file.startsWith(prefix))
 }
 
+function* commitCandidates(source: string): Generator<string> {
+  for (const line of source.split('\n')) {
+    let previousEnd = 0
+    let gitCommand = false
+    for (const match of line.matchAll(commitCandidate)) {
+      const prefix = line.slice(previousEnd, match.index)
+      const end = match.index + match[0].length
+      previousEnd = end
+      const separator = Math.max(prefix.lastIndexOf(';'), prefix.lastIndexOf('&'), prefix.lastIndexOf('|'))
+      const commandPrefix = prefix.slice(separator + 1)
+      if (separator !== -1) gitCommand = false
+      if (decimalCommitCommand.test(commandPrefix)) gitCommand = true
+      if (/(?:^|\s)--(?:\s|$)/.test(commandPrefix)) gitCommand = false
+      // Decimal data becomes a reference only with Git-specific labels, paths, commands, or revision suffixes.
+      if (/[a-f]/i.test(match[0])
+        || decimalCommitLabel.test(prefix)
+        || decimalCommitPath.test(prefix)
+        || (gitCommand && (!decimalCommandData.test(prefix) || decimalReferenceOption.test(prefix)))
+        || line[end] === '^' || line[end] === '~') {
+        yield match[0].toLowerCase()
+      }
+    }
+  }
+}
+
 /**
  * Inspect a maintained source file against known commit identifiers.
  * @param file - Repository-relative path used in diagnostics and exclusions.
  * @param source - File text or a symlink's stored target.
  * @param commits - Lowercase, unambiguous full or abbreviated commit identifiers.
- * @returns One finding per line and reference kind; digests and other Git object types are accepted.
+ * @returns One finding per line and reference kind; decimal data without Git-reference syntax,
+ * long digests, and other Git object types are accepted.
  */
 export function findRepositoryReferences(
   file: string,
@@ -49,7 +84,7 @@ export function findRepositoryReferences(
     if (organizationUrl.test(canonicalReferenceText(line).replace(kitRepositoryUrl, ''))) {
       references.push({ file, line: index + 1, kind: 'organization-url' })
     }
-    if ([...line.matchAll(commitCandidate)].some(match => commits.has(match[0].toLowerCase()))) {
+    if ([...commitCandidates(line)].some(candidate => commits.has(candidate))) {
       references.push({ file, line: index + 1, kind: 'commit-hash' })
     }
   }
@@ -110,8 +145,7 @@ export function uniquePrefixMatch(objects: readonly string[], prefix: string): s
  * @returns Lowercase candidates that name exactly one available object, which is a commit.
  */
 export function repositoryCommits(repoRoot: string, sources: Iterable<string>): Set<string> {
-  const candidates = [...new Set([...sources].flatMap(source =>
-    [...source.matchAll(commitCandidate)].map(match => match[0].toLowerCase())))]
+  const candidates = [...new Set([...sources].flatMap(source => [...commitCandidates(source)]))]
   if (candidates.length === 0) return new Set()
   // Git resolves prefixes across all available objects, including unreachable and alternate ones;
   // one listing of those objects replaces one Git prefix lookup per candidate.

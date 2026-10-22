@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-10-22-decimal-repository-reference-candidates.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-10-22-decimal-repository-reference-candidates.md
+/agent-note-decimal-data-requires-git-reference-syntax-before-commit-lookup:
+  en: 0de700127f10b097
+  zh: 7d82d7be684418c5
+/agent-note-decimal-data-requires-git-reference-syntax-before-commit-lookup/problem:
+  en: 7e1d6f58732cc91b
+  zh: 478136d058ddd6c4
+/agent-note-decimal-data-requires-git-reference-syntax-before-commit-lookup/decision:
+  en: cd07a3c9f91464d9
+  zh: b09b534aaa2cfd00
+/agent-note-decimal-data-requires-git-reference-syntax-before-commit-lookup/alternatives-considered:
+  en: 0c30de0f4d5c1603
+  zh: 0bc26d384b4c1481
+/agent-note-decimal-data-requires-git-reference-syntax-before-commit-lookup/consequences:
+  en: bbdbe37bb158e3df
+  zh: 27b2f4b5a0b22085

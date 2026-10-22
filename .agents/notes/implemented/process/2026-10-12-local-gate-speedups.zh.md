@@ -85,6 +85,7 @@ Status: implemented
 ### 4. 仓库引用候选对照一次对象列表解析
 
 - **改动：** [`verify-repository-references.ts`](../../../../scripts/verify-repository-references.ts) 用 `git cat-file --batch-all-objects --batch-check=%(objectname)` 一次列出全部对象名（约 120 万个对象，0.6 s），排序后在内存中对每个小写候选前缀做二分查找；随后一次 `--batch-check=%(objectname) %(objecttype)` 调用读取命中对象的类型。只有当候选前缀恰好匹配一个可用对象且该对象是 commit 时，它才算 commit 引用，这与 Git 自身前缀查找的规则相同；与 Git 的查找一样，该列表也包含不可达对象与 alternate 对象。
+- **候选语法：** 前缀查找前先区分十进制数据与明确的数字 Git 引用（[决策](../bug-fix/2026-10-22-decimal-repository-reference-candidates.zh.md)）。
 - **性能：** 166.8 → 15.7 s。
 - **无损依据：** 在 27,050 个真实与合成候选上（包括歧义前缀、blob 与 tree 前缀以及随机字符串），Git 的逐候选前缀查找与内存查找的判定完全一致。
 - **取舍：** 120 万个对象的列表约为 49 MiB 的 Git 输出，读取时的输出上限为 1 GiB。
@@ -151,7 +152,7 @@ Status: implemented
 
 ## 后果
 
-无需重查时 pre-push `typecheck` 约 14–22 s，`lint` 与 `doc-typecheck` 的前置步骤约 12 s，改动 1 个文件的提交的钩子约 4 s。`pnpm run test` 在本地最多启动 48 个 fork，`test:docs` 与 `doc-sync` 最多同时运行 8 个门禁。Typert 输出、生成的页面、文件列表与引用判定都与基线逐字节一致。
+无需重查时 pre-push `typecheck` 约 14–22 s，`lint` 与 `doc-typecheck` 的前置步骤约 12 s，改动 1 个文件的提交的钩子约 4 s。`pnpm run test` 在本地最多启动 48 个 fork，`test:docs` 与 `doc-sync` 最多同时运行 8 个门禁。这些性能改动保留 Typert 输出、生成的页面、文件列表和对象前缀解析结果。
 
 代价：类型检查命令不刷新可运行的 bundle；第三方声明过期时在推送后于测试 lane 失败；本地默认值不使用超过上限的 CPU，而配额低于上限的容器仍会超额订阅；并发 8 个文档门禁抬高 `doc-sync` 的 RSS 峰值；CLI help 峰值约用 3.6 GB 内存；doc graphs 与 markdown links 假定运行期间工作树不变；除 Emitter 用例外，`type-model.spec.ts` 检验的是桩，而不是真实 zod、`@types/node`、DOM lib 与磁盘 I/O；增量 `typecheck` 继承 Issue #6022 跟踪的 Remote 声明缺口。
 

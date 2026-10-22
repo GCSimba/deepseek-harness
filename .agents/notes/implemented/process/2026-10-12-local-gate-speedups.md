@@ -85,6 +85,7 @@ All numbers are wall times from one shared Linux container with a 64-CPU quota o
 ### 4. Repository-reference candidates resolve against one object listing
 
 - **Change:** [`verify-repository-references.ts`](../../../../scripts/verify-repository-references.ts) lists every object name once with `git cat-file --batch-all-objects --batch-check=%(objectname)`, about 1.2 million objects in 0.6 s, sorts the list, and binary-searches each lowercase candidate prefix in memory; one `--batch-check=%(objectname) %(objecttype)` call then reads the types of the matched objects. A candidate is a commit reference only when its prefix matches exactly one available object and that object is a commit, the rule Git's own prefix lookup applies; the listing covers unreachable and alternate objects, as Git's lookup does.
+- **Candidate syntax:** Decimal data and explicit numeric Git references are distinguished before prefix lookup ([decision](../bug-fix/2026-10-22-decimal-repository-reference-candidates.md)).
 - **Performance:** 166.8 → 15.7 s.
 - **Why it is lossless:** Git's per-candidate prefix lookup and the in-memory search classify all 27,050 real and synthetic candidates identically, including ambiguous prefixes, blob and tree prefixes, and random strings.
 - **Trade-off:** The listing is about 49 MiB of Git output for 1.2 million objects, read under a 1 GiB output limit.
@@ -151,7 +152,7 @@ Both trees were measured in the same session, alternating baseline and implement
 
 ## Consequences
 
-The pre-push `typecheck` with nothing to recheck takes about 14–22 s, the `lint` and `doc-typecheck` prerequisite about 12 s, and the hooks of a one-file commit about 4 s. `pnpm run test` starts at most 48 forks locally, and `test:docs` and `doc-sync` run up to 8 gates at once. Typert outputs, generated pages, file lists, and reference classifications are byte-identical to the baseline.
+The pre-push `typecheck` with nothing to recheck takes about 14–22 s, the `lint` and `doc-typecheck` prerequisite about 12 s, and the hooks of a one-file commit about 4 s. `pnpm run test` starts at most 48 forks locally, and `test:docs` and `doc-sync` run up to 8 gates at once. The performance changes preserve Typert outputs, generated pages, file lists, and object-prefix resolution.
 
 Costs: type-check commands do not refresh runnable bundles; a stale notices file fails in the test lane after push; local defaults ignore CPUs above the caps and still oversubscribe a container whose quota is below them; 8 concurrent documentation gates raise the `doc-sync` RSS peak; CLI help uses about 3.6 GB at peak; doc graphs and markdown links assume the tree does not change during a run; `type-model.spec.ts` exercises stubs rather than real zod, `@types/node`, the DOM library, and disk I/O outside the Emitter case; and incremental `typecheck` inherits the Remote-declaration gap that Issue #6022 tracks.
 

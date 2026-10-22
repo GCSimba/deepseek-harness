@@ -57,6 +57,15 @@ function collidingCommitBodies(tree: string, length: number): [string, string] {
   }
 }
 
+function decimalPrefixCommitBody(tree: string): string {
+  const algorithm = tree.length === 64 ? 'sha256' : 'sha1'
+  for (let index = 0; ; index += 1) {
+    const body = `tree ${tree}\nauthor T <t@example.invalid> 0 +0000\ncommitter T <t@example.invalid> 0 +0000\n\ndecimal ${String(index)}\n`
+    const name = createHash(algorithm).update(`commit ${String(Buffer.byteLength(body))}\0${body}`).digest('hex')
+    if (/^\d{8}/.test(name)) return body
+  }
+}
+
 describe('unique object-name prefix search', () => {
   it.each([
     [['aaa1', 'bbb2', 'ccc3'], 'bbb', 'bbb2'],
@@ -84,9 +93,9 @@ describe('maintained repository reference policy', () => {
   it('rejects complete and abbreviated commit identifiers in tracked, staged, and new files', (test) => {
     const fixture = repository(test)
     fixture.write('tracked.md', `release\n${fixture.commit}\n${fixture.commit.toUpperCase()}\n`)
-    fixture.write('staged.md', fixture.commit.slice(0, 7))
+    fixture.write('staged.md', `commit ${fixture.commit.slice(0, 7)}`)
     fixture.git(['add', 'staged.md'])
-    fixture.write('new.md', `\0${fixture.commit.slice(0, 12)}`)
+    fixture.write('new.md', `\0commit ${fixture.commit.slice(0, 12)}`)
 
     expect(scanRepositoryReferences(fixture.root)).toEqual(expect.arrayContaining([
       { file: 'tracked.md', line: 2, kind: 'commit-hash' },
@@ -140,6 +149,98 @@ describe('maintained repository reference policy', () => {
     expect(scanRepositoryReferences(fixture.root)).toEqual([])
   })
 
+  it('accepts decimal data that coincides with an available commit prefix', (test) => {
+    const fixture = repository(test)
+    const commit = fixture.git(['hash-object', '-t', 'commit', '-w', '--stdin'], decimalPrefixCommitBody(fixture.tree))
+    const decimal = commit.slice(0, 8)
+    fixture.write('dependencies.lock', `size = ${decimal}\n`)
+    fixture.write('data.json', `{ "size": ${decimal}, "id": "${decimal}" }\n`)
+    fixture.write('values.md', `count: ${decimal}\ntimeout = ${decimal}\n\`${decimal}\`\n`)
+    fixture.write('reference.md', `commit: \`${decimal}\`\n`)
+
+    expect(scanRepositoryReferences(fixture.root)).toEqual([
+      { file: 'reference.md', line: 1, kind: 'commit-hash' },
+    ])
+  })
+
+  it('accepts decimal dates and quoted ordinary identifiers without Git-reference syntax', () => {
+    const decimal = ['2026', '1022'].join('')
+    const source = `date = ${decimal}\n"id": "${decimal}"\n${decimal}\n`
+    expect(findRepositoryReferences('data.md', source, new Set([decimal]))).toEqual([])
+  })
+
+  it('classifies each occurrence of a decimal prefix independently', () => {
+    const decimal = '6'.repeat(8)
+    const source = `size = ${decimal}\ncommit: ${decimal}\ncount = ${decimal}\n`
+    expect(findRepositoryReferences('mixed.md', source, new Set([decimal]))).toEqual([
+      { file: 'mixed.md', line: 2, kind: 'commit-hash' },
+    ])
+  })
+
+  it.each([
+    'commit $id',
+    'Commit: `$id`',
+    'commitHash = "$id"',
+    '"commit_sha": "$id"',
+    "revision: '$id'",
+    'ref = `$id`',
+    'SHA: "$id"',
+    'SHA-1 = $id',
+    '提交：$id',
+    '提交哈希: `$id`',
+    'https://github.com/owner/project/commit/$id',
+    'https://github.com/owner/project/commits/$id',
+    'https://github.com/owner/project/blob/$id/file.md',
+    'https://github.com/owner/project/tree/$id',
+    'git show $id',
+    'git diff $id',
+    'git cherry-pick $id',
+    'git show --stat $id',
+    'git checkout --detach $id',
+    'git diff HEAD $id',
+    'git diff HEAD..$id',
+    'git diff $id..HEAD',
+    'git diff $base $id',
+    'git log --max-count=2 $id',
+    'git rebase --onto=$id HEAD~2',
+    'git log --contains=$id',
+    'git branch --merged=$id',
+    '$id~2',
+    '$id^',
+    '$id^{commit}',
+  ])('rejects a decimal commit identifier in %s', (template) => {
+    const decimal = '6'.repeat(8)
+    const source = template.replace('$base', 'd'.repeat(7)).replace('$id', decimal)
+    expect(findRepositoryReferences('reference.md', source, new Set([decimal]))).toEqual([
+      { file: 'reference.md', line: 1, kind: 'commit-hash' },
+    ])
+  })
+
+  it.each([
+    'git log --max-count=$id',
+    'git log --max-count $id',
+    'git log -n $id',
+    'git log --skip $id',
+    'git log --abbrev $id',
+    'git diff --unified $id',
+    'git diff -U $id',
+    'git diff --inter-hunk-context $id',
+    'git diff --stat-width $id',
+    'git diff --stat-name-width $id',
+    'git diff --stat-graph-width $id',
+    'git diff --stat-count $id',
+    'git log --since $id',
+    'git log --until $id',
+    'git log --after $id',
+    'git log --before $id',
+    'git show --format="$id"',
+    'git diff -- $id',
+    'git show HEAD; count = $id',
+  ])('accepts decimal command data in %s', (template) => {
+    const decimal = '6'.repeat(8)
+    expect(findRepositoryReferences('command.md', template.replace('$id', decimal), new Set([decimal]))).toEqual([])
+  })
+
   it('accepts a prefix that two available commits share and rejects a longer unique prefix', (test) => {
     const fixture = repository(test)
     const [first, second] = collidingCommitBodies(fixture.tree, 7).map(body =>
@@ -148,8 +249,8 @@ describe('maintained repository reference policy', () => {
     let shared = 0
     while (first[shared] === second[shared]) shared += 1
     expect(shared).toBeGreaterThanOrEqual(7)
-    fixture.write('ambiguous.md', first.slice(0, 7))
-    fixture.write('unique.md', first.slice(0, shared + 1))
+    fixture.write('ambiguous.md', `commit ${first.slice(0, 7)}`)
+    fixture.write('unique.md', `commit ${first.slice(0, shared + 1)}`)
     expect(scanRepositoryReferences(fixture.root)).toEqual([{ file: 'unique.md', line: 1, kind: 'commit-hash' }])
   })
 
