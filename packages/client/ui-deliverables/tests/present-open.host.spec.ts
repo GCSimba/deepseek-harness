@@ -132,12 +132,22 @@ describe('Presented workspace file native open route', () => {
   })
 
   it('opens external regular files through absolute and relative paths but refuses final symlinks', async () => {
-    const { root, cwd, file, open, opener } = await fixture()
+    const { root, cwd, file, open, opener, ctx } = await fixture()
     const outside = join(root, 'outside.txt')
     await writeFile(outside, 'outside')
     const source = join(cwd, file.path)
     await unlink(source)
-    await symlink(outside, source)
+    if (process.platform === 'win32') {
+      // Junctions are final links without requiring Windows file-symlink privileges.
+      const directory = join(root, 'outside-directory')
+      await mkdir(directory)
+      await symlink(directory, source, 'junction')
+    } else {
+      await symlink(outside, source, 'file')
+    }
+    cleanups.push(() => unlink(source))
+    await expect(ctx.workspaceFiles.stat({ sessionId: SessionId('owner'), workspaceRoot: cwd }, file.path, new AbortController().signal))
+      .rejects.toMatchObject({ code: 'workspace-file/not-regular-file', details: { kind: 'symlink' } })
     expect((await open()).status).toBe(404)
     expect(opener).not.toHaveBeenCalled()
     for (const path of ['../outside.txt', outside]) {
