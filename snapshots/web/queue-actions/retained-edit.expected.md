@@ -1,0 +1,11 @@
+- button "2 queued messages" [disabled] [expanded]
+- list:
+  - listitem:
+    - text: Queue item to remove
+    - button "Edit queued message"
+    - button "Remove queued message"
+    - button "Steer queued message"
+  - listitem:
+    - textbox "Edit queued message": Edited queue item
+    - button "Save queued message"
+    - button "Cancel editing"

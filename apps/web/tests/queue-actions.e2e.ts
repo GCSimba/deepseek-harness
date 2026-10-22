@@ -22,6 +22,7 @@ const SNAPSHOT_DIR = fileURLToPath(new URL('../../../snapshots/web/queue-actions
 const FIXTURE = fileURLToPath(new URL('../../../snapshots/web/live-interactions/session.v3.jsonl', import.meta.url))
 const COLLAPSED_EXPECTED = join(SNAPSHOT_DIR, 'collapsed.expected.md')
 const EDITING_EXPECTED = join(SNAPSHOT_DIR, 'editing.expected.md')
+const RETAINED_EDIT_EXPECTED = join(SNAPSHOT_DIR, 'retained-edit.expected.md')
 const LAYOUT_EXPECTED = join(SNAPSHOT_DIR, 'layout.expected.md')
 const PRESERVED_EXPECTED = join(SNAPSHOT_DIR, 'preserved.expected.md')
 const PRESERVED_EXPANDED_EXPECTED = join(SNAPSHOT_DIR, 'preserved-expanded.expected.md')
@@ -216,7 +217,37 @@ describe('web e2e: queue row actions', () => {
     expect(Math.abs(tooltipGeometry!.tooltipTop - tooltipGeometry!.declaredTop)).toBeLessThan(2)
     const editingSnapshot = await captureStableAria(page, '[class*="centerCol"]', scaffold.workspaceCwd)
     await compareOrRefreshGolden(EDITING_EXPECTED, editingSnapshot, MODE)
-    await settleQueueAction(() => save.click(), EDITED)
+    const editRequests: unknown[] = []
+    page.on('request', (request) => {
+      if (request.url().endsWith('/api/session/updateQueue')) editRequests.push(request.postDataJSON())
+    })
+    const editedOnHost = Promise.withResolvers<undefined>()
+    const releaseEdit = Promise.withResolvers<undefined>()
+    await page.route('**/api/session/updateQueue', async (route) => {
+      const response = await route.fetch()
+      editedOnHost.resolve(undefined)
+      await releaseEdit.promise
+      await route.fulfill({ response })
+    }, { times: 1 })
+    const editAcknowledged = page.waitForResponse('**/api/session/updateQueue')
+    try {
+      await editor.fill('Earlier saved revision')
+      await save.click()
+      await editedOnHost.promise
+      await editor.fill(EDITED_CONTENT)
+      await editor.press('Enter')
+      await editor.press('Enter')
+    } finally {
+      releaseEdit.resolve(undefined)
+    }
+    expect((await editAcknowledged).ok()).toBe(true)
+    await expect.poll(() => save.isEnabled()).toBe(true)
+    expect(await editor.inputValue()).toBe(EDITED_CONTENT)
+    expect(editRequests).toHaveLength(1)
+    const retainedEdit = await captureStableAria(page, '[data-queue-dock]', scaffold.workspaceCwd)
+    await compareOrRefreshGolden(RETAINED_EDIT_EXPECTED, retainedEdit, MODE)
+    await settleQueueAction(() => editor.press('Enter'), EDITED)
+    expect(editRequests).toHaveLength(2)
     await page.getByText(EDITED, { exact: true }).waitFor()
 
     const removeRow = page.locator('[data-queue-dock] li', { hasText: REMOVE })
@@ -493,7 +524,7 @@ describe('web e2e: queue row actions', () => {
     await assertFixtureInventory(
       SNAPSHOT_DIR,
       [
-        'collapsed.expected.md', 'editing.expected.md', 'layout.expected.md',
+        'collapsed.expected.md', 'editing.expected.md', 'retained-edit.expected.md', 'layout.expected.md',
         'preserved.expected.md', 'preserved-expanded.expected.md', 'ui.expected.md',
         'sending.expected.md', 'failed.expected.md', 'writer-held.expected.md',
         'goal-stop.expected.md',

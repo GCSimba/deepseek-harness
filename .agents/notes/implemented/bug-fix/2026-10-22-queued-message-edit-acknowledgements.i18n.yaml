@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-10-22-queued-message-edit-acknowledgements.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-10-22-queued-message-edit-acknowledgements.md
+/agent-note-queue-edit-acknowledgements-belong-to-one-draft-revision:
+  en: 78695b17ae22989c
+  zh: 7c662bb2d7e1cb3b
+/agent-note-queue-edit-acknowledgements-belong-to-one-draft-revision/problem:
+  en: 77873bdb0e4246c2
+  zh: 565e3132219615af
+/agent-note-queue-edit-acknowledgements-belong-to-one-draft-revision/decision:
+  en: 7273eed06ac2a5fc
+  zh: 67796290e9556da5
+/agent-note-queue-edit-acknowledgements-belong-to-one-draft-revision/alternatives-considered:
+  en: 9517215434f3f687
+  zh: 73bd0956d707b46d
+/agent-note-queue-edit-acknowledgements-belong-to-one-draft-revision/consequences:
+  en: 4cf77688b6cb37be
+  zh: b6dd8ee90c056ad6

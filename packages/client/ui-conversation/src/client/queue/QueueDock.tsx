@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { useEffect, useId, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { FileAttachmentRef, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { PropsLocale, PropsRenderFactories, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -101,6 +101,8 @@ export type QueueDockProps = PropsRuntime<'conversation.input.dock'> & QueueDock
  * Queue strip: one item renders directly; multiple items default to a
  * collapsible count header; an empty queue renders nothing. Local queued submissions
  * show sending status and disabled actions until their Host queue rows arrive.
+ * Edit acknowledgements close only the submitted draft revision; later typing
+ * remains editable and requires another explicit save.
  */
 export function QueueDock({ useSession, useProjection, updateQueue, notify, loadImage, renderFactorySlot, t }: QueueDockProps) {
   const inbox = useProjection('inbox') as unknown as InboxState | undefined
@@ -125,6 +127,7 @@ export function QueueDock({ useSession, useProjection, updateQueue, notify, load
   const queueMutable = useSession(s => s.subagent === null || s.subagent.address.mode === 'continuable')
   const [editing, setEditing] = useState<{ id: MessageId; text: string } | null>(null)
   const [busy, setBusy] = useState<MessageId | null>(null)
+  const actionPending = useRef(false)
   const [collapsed, setCollapsed] = useState(true)
   const listId = useId()
 
@@ -144,6 +147,8 @@ export function QueueDock({ useSession, useProjection, updateQueue, notify, load
     action: QueueAction,
     failure: string,
   ): Promise<boolean> => {
+    if (actionPending.current) return false
+    actionPending.current = true
     setBusy(itemId)
     try {
       await updateQueue(itemId, action)
@@ -152,17 +157,19 @@ export function QueueDock({ useSession, useProjection, updateQueue, notify, load
       notify('error', failure)
       return false
     } finally {
+      actionPending.current = false
       setBusy(current => current === itemId ? null : current)
     }
   }
 
   const saveEdit = async (): Promise<void> => {
     if (editing === null || editing.text.trim() === '') return
+    const submitted = editing
     if (await applyAction(
-      editing.id,
-      { kind: 'edit', content: [{ type: 'text', text: editing.text }] },
+      submitted.id,
+      { kind: 'edit', content: [{ type: 'text', text: submitted.text }] },
       t('queue.editFailed'),
-    )) setEditing(null)
+    )) setEditing(current => current === submitted ? null : current)
   }
 
   return (

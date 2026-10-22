@@ -606,6 +606,117 @@ describe('QueueDock', () => {
     })
   })
 
+  it.each(['new draft', 'submitted draft'])('retains a later edit revision containing %s after a pending save succeeds', async (laterText) => {
+    const snap = snapshotWith([row('i-edit', 'before')])
+    const source = liveSession(snap)
+    const pending = Promise.withResolvers<undefined>()
+    const updateQueue = vi.fn<QueueDockInjected['updateQueue']>()
+      .mockImplementationOnce(() => pending.promise)
+      .mockResolvedValue(undefined)
+    const notify = vi.fn()
+    const view = render(
+      <QueueDock {...kitFor(snap, { updateQueue, notify })} useSession={source.useSession} useProjection={source.useProjection} />,
+    )
+
+    fireEvent.click(view.getByLabelText('编辑排队消息'))
+    const editor = view.getByRole('textbox')
+    fireEvent.change(editor, { target: { value: 'submitted draft' } })
+    fireEvent.click(view.getByLabelText('保存排队消息'))
+    expect(view.getByLabelText('保存排队消息')).toHaveProperty('disabled', true)
+    expect(editor).toHaveProperty('disabled', false)
+    fireEvent.change(editor, { target: { value: 'intermediate draft' } })
+    fireEvent.change(editor, { target: { value: laterText } })
+    await act(async () => {
+      source.push(snapshotWith([row('i-edit', 'submitted draft')]))
+      pending.resolve(undefined)
+      await pending.promise
+    })
+
+    expect(view.getByRole('textbox')).toBe(editor)
+    expect(editor).toHaveProperty('value', laterText)
+    expect(updateQueue).toHaveBeenCalledExactlyOnceWith(iid('i-edit'), {
+      kind: 'edit', content: [{ type: 'text', text: 'submitted draft' }],
+    })
+    expect(notify).not.toHaveBeenCalled()
+    expect(view.getByLabelText('保存排队消息')).toHaveProperty('disabled', false)
+    fireEvent.keyDown(editor, { key: 'Enter' })
+    await waitFor(() => { expect(view.queryByRole('textbox')).toBeNull() })
+    expect(updateQueue).toHaveBeenLastCalledWith(iid('i-edit'), {
+      kind: 'edit', content: [{ type: 'text', text: laterText }],
+    })
+    expect(updateQueue).toHaveBeenCalledTimes(2)
+  })
+
+  it('ignores repeated save keys before and after the pending state renders', async () => {
+    const snap = snapshotWith([row('i-edit', 'before')])
+    const source = liveSession(snap)
+    const pending = Promise.withResolvers<undefined>()
+    const updateQueue = vi.fn<QueueDockInjected['updateQueue']>(() => pending.promise)
+    const view = render(
+      <QueueDock {...kitFor(snap, { updateQueue })} useSession={source.useSession} useProjection={source.useProjection} />,
+    )
+    fireEvent.click(view.getByLabelText('编辑排队消息'))
+    const editor = view.getByRole('textbox')
+    act(() => {
+      fireEvent.keyDown(editor, { key: 'Enter' })
+      fireEvent.keyDown(editor, { key: 'Enter' })
+    })
+    fireEvent.keyDown(editor, { key: 'Enter' })
+    expect(updateQueue).toHaveBeenCalledTimes(1)
+    await act(async () => { pending.resolve(undefined); await pending.promise })
+    expect(view.queryByRole('textbox')).toBeNull()
+  })
+
+  it('retains the latest draft on a failed save and permits retrying it', async () => {
+    const snap = snapshotWith([row('i-edit', 'before')])
+    const source = liveSession(snap)
+    const pending = Promise.withResolvers<undefined>()
+    const updateQueue = vi.fn<QueueDockInjected['updateQueue']>()
+      .mockImplementationOnce(() => pending.promise)
+      .mockResolvedValue(undefined)
+    const notify = vi.fn()
+    const view = render(
+      <QueueDock {...kitFor(snap, { updateQueue, notify })} useSession={source.useSession} useProjection={source.useProjection} />,
+    )
+    fireEvent.click(view.getByLabelText('编辑排队消息'))
+    const editor = view.getByRole('textbox')
+    fireEvent.keyDown(editor, { key: 'Enter' })
+    fireEvent.change(editor, { target: { value: 'retry this draft' } })
+    await act(async () => {
+      pending.reject(new Error('transport failed'))
+      await pending.promise.catch(() => undefined)
+    })
+    expect(view.getByRole('textbox')).toBe(editor)
+    expect(editor).toHaveProperty('value', 'retry this draft')
+    expect(notify).toHaveBeenCalledExactlyOnceWith('error', t('queue.editFailed'))
+    fireEvent.click(view.getByLabelText('保存排队消息'))
+    await waitFor(() => { expect(view.queryByRole('textbox')).toBeNull() })
+    expect(updateQueue).toHaveBeenCalledTimes(2)
+    expect(updateQueue).toHaveBeenLastCalledWith(iid('i-edit'), {
+      kind: 'edit', content: [{ type: 'text', text: 'retry this draft' }],
+    })
+  })
+
+  it.each(['cancel', 'retire'] as const)('does not restore an editor after %s while its save is pending', async (operation) => {
+    const snap = snapshotWith([row('i-edit', 'before')])
+    const source = liveSession(snap)
+    const pending = Promise.withResolvers<undefined>()
+    const updateQueue = vi.fn<QueueDockInjected['updateQueue']>(() => pending.promise)
+    const view = render(
+      <QueueDock {...kitFor(snap, { updateQueue })} useSession={source.useSession} useProjection={source.useProjection} />,
+    )
+    fireEvent.click(view.getByLabelText('编辑排队消息'))
+    const editor = view.getByRole('textbox')
+    fireEvent.keyDown(editor, { key: 'Enter' })
+    fireEvent.change(editor, { target: { value: 'later draft' } })
+    if (operation === 'cancel') fireEvent.keyDown(editor, { key: 'Escape' })
+    else act(() => { source.push(snapshotWith([])) })
+    expect(view.queryByRole('textbox')).toBeNull()
+    await act(async () => { pending.resolve(undefined); await pending.promise })
+    expect(view.queryByRole('textbox')).toBeNull()
+    expect(updateQueue).toHaveBeenCalledTimes(1)
+  })
+
   it('cancels an edit by button or Escape without mutating the queue', () => {
     const snap = snapshotWith([row('i-edit', 'before')])
     const source = liveSession(snap)
